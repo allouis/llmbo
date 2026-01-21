@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export NIX_CONFIG='experimental-features = nix-command flakes'
+
+cd ~/.config/home-manager
+
+echo "Updating llm-agents flake input..."
+nix flake update llm-agents
+
+echo "Applying home-manager configuration..."
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64) ARCH="x86_64-linux" ;;
+  aarch64) ARCH="aarch64-linux" ;;
+esac
+
+nix run home-manager -- switch --impure --flake ".#agent-$ARCH"
+
+echo "Done! You may need to restart your shell for changes to take effect."
