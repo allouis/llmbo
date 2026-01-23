@@ -480,8 +480,8 @@ main() {
   echo ""
   success "Deployment complete!"
   echo ""
-  echo "Connect with agent forwarding: ssh -A $TARGET_HOST"
-  echo "Then start a tmux session: tmux new -s agent"
+  echo "To clone your repos, connect with: ssh -A $TARGET_HOST"
+  echo "Then run sandbox-key to set up a permanent SSH key for this machine."
 }
 
 main "$@"

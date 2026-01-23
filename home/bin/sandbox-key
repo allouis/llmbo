@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Generates an SSH key for this machine.
+
+key_path="$HOME/.ssh/id_ed25519"
+
+if [ ! -f "$key_path" ]; then
+  echo "Generating SSH key..."
+  mkdir -p "$HOME/.ssh"
+  ssh-keygen -t ed25519 -f "$key_path" -N "" -C "llmbo-sandbox"
+  echo ""
+fi
+
+echo "Add this key to GitHub, GitLab, or wherever you need:"
+echo ""
+cat "$key_path.pub"

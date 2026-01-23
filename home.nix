@@ -69,12 +69,13 @@
         set +a
       fi
 
-      # Update agent socket symlink on new SSH connections
-      if [ -n "$SSH_AUTH_SOCK" ] && [ "$SSH_AUTH_SOCK" != "$HOME/.ssh/agent_socket" ]; then
+      # Update agent socket symlink on new SSH connections with -A
+      # Standard SSH forwarding uses /tmp/ssh-XXX/agent.XXX
+      if [[ "$SSH_AUTH_SOCK" == /tmp/ssh-*/agent.* ]]; then
         mkdir -p "$HOME/.ssh"
         ln -sf "$SSH_AUTH_SOCK" "$HOME/.ssh/agent_socket"
+        export SSH_AUTH_SOCK="$HOME/.ssh/agent_socket"
       fi
-      export SSH_AUTH_SOCK="$HOME/.ssh/agent_socket"
 
       # Use compatible TERM for remote sessions (kitty/alacritty terminfo often missing)
       case "$TERM" in
@@ -91,6 +92,7 @@
         echo -e "  \e[1mopencode\e[0m               OpenCode $(opencode --version 2>/dev/null | head -1 || echo "")"
         echo -e "  \e[1mupdate-agents\e[0m          Update agents to latest"
         echo -e "  \e[1mupdate-system\e[0m          Update all packages"
+        echo -e "  \e[1msandbox-key\e[0m            Get SSH key for this machine"
         echo ""
         echo -e "  \e[1mtmux new -s work\e[0m       Start persistent session"
         echo -e "  \e[1mtmux attach\e[0m            Reconnect to session"
@@ -98,11 +100,15 @@
         echo -e "  \e[2mdocker is aliased to podman (rootless)\e[0m"
         echo ""
 
-        # Warn if SSH agent forwarding is active
+        # Note about SSH key forwarding (check if agent is actually accessible)
         if ssh-add -l &>/dev/null; then
-          echo -e "  \e[33m⚠ SSH agent forwarding detected.\e[0m"
-          echo -e "  \e[2mAgents can use your SSH keys to access other servers.\e[0m"
-          echo -e "  \e[2mRun \e[0mclear-forwarded-ssh\e[2m after cloning to revoke access.\e[0m"
+          echo -e "  \e[33mSSH key forwarding active.\e[0m"
+          echo -e "  \e[2mGood for cloning repos, but it goes away when you disconnect.\e[0m"
+          if [[ "$SSH_AUTH_SOCK" == *orbstack* ]]; then
+            echo -e "  \e[2mOrbStack always forwards your SSH keys.\e[0m"
+          fi
+          echo -e "  \e[2mRun \e[0msandbox-key\e[2m to generate a permanent key for this machine.\e[0m"
+          echo -e "  \e[2mRun \e[0mclear-forwarded-ssh\e[2m to remove access to your forwarded keys.\e[0m"
           echo ""
         fi
       fi
