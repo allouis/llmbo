@@ -254,7 +254,8 @@ prompt_api_keys() {
     echo "GitHub CLI authentication (optional)"
     echo ""
     echo "To enable 'gh' commands, provide a Personal Access Token."
-    echo "Create one at: https://github.com/settings/tokens"
+    echo "Agents will have full access to this token."
+    echo "Consider using a fine-grained PAT: https://github.com/settings/tokens?type=beta"
     echo ""
     read -rsp "GitHub token (or press Enter to skip): " GH_TOKEN
     echo ""
@@ -274,6 +275,7 @@ prompt_api_keys() {
     echo "Linear MCP (optional)"
     echo ""
     echo "To enable issue tracking via Linear MCP, provide an API key."
+    echo "Agents will have full access to this token."
     echo "Create one at: https://linear.app/settings/api"
     echo ""
     read -rsp "Linear API key (or press Enter to skip): " LINEAR_API_KEY
@@ -294,6 +296,7 @@ prompt_api_keys() {
     echo "Context7 MCP (optional)"
     echo ""
     echo "To enable docs lookup via Context7 MCP, provide an API key."
+    echo "Agents will have full access to this token."
     echo "Create one at: https://context7.com/settings"
     echo ""
     read -rsp "Context7 API key (or press Enter to skip): " CONTEXT7_API_KEY

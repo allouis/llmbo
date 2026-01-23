@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Removes access to your forwarded SSH key.
+
+socket="$HOME/.ssh/agent_socket"
+
+if [ ! -e "$socket" ] && [ -z "${SSH_AUTH_SOCK:-}" ]; then
+  echo "No forwarded SSH key to remove."
+  exit 0
+fi
+
+if [ -e "$socket" ]; then
+  rm -f "$socket"
+  echo "Removed access to your forwarded SSH key."
+else
+  echo "Already removed."
+fi

@@ -97,6 +97,14 @@
         echo ""
         echo -e "  \e[2mdocker is aliased to podman (rootless)\e[0m"
         echo ""
+
+        # Warn if SSH agent forwarding is active
+        if ssh-add -l &>/dev/null; then
+          echo -e "  \e[33m⚠ SSH agent forwarding detected.\e[0m"
+          echo -e "  \e[2mAgents can use your SSH keys to access other servers.\e[0m"
+          echo -e "  \e[2mRun \e[0mclear-forwarded-ssh\e[2m after cloning to revoke access.\e[0m"
+          echo ""
+        fi
       fi
     '';
   };
