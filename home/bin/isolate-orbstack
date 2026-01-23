@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Isolates the VM from OrbStack's host integration.
+#
+# OrbStack is designed for convenience, not isolation. It exposes:
+# - Your Mac's entire filesystem via virtiofs mounts
+# - Your SSH agent (can sign with your keys)
+# - Clipboard access (pbcopy/pbpaste)
+# - AppleScript execution, screenshots, Spotlight search
+# - Network access to host services
+#
+# This script removes what it can, but is NOT a security boundary.
+# The agent has sudo, so it could potentially undo some of these changes.
+# For true isolation, use a real VM or cloud instance.
+
+echo "Isolating from OrbStack host integration..."
+echo ""
+
+orbstack_run="/opt/orbstack-guest/run"
+orbstack_bin="/opt/orbstack-guest/bin"
+
+# Check if we're actually on OrbStack
+if [ ! -d "$orbstack_run" ]; then
+  echo "Not running on OrbStack. Nothing to do."
+  exit 0
+fi
+
+# 1. Unmount all Mac virtiofs mounts
+echo "Filesystem mounts:"
+mounts=(/mnt/mac /Users /Applications /Library /Volumes /private)
+any_unmounted=false
+
+for mount_point in "${mounts[@]}"; do
+  if mountpoint -q "$mount_point" 2>/dev/null; then
+    echo "  Unmounting $mount_point"
+    sudo umount -l "$mount_point" 2>/dev/null || true
+    any_unmounted=true
+  fi
+done
+
+if [ "$any_unmounted" = false ]; then
+  echo "  Already unmounted"
+fi
+
+# 2. Remove SSH symlinks that point to /mnt/mac (now dangling)
+echo ""
+echo "SSH key symlinks:"
+any_removed=false
+
+if [ -d "$HOME/.ssh" ]; then
+  for file in "$HOME/.ssh"/*; do
+    [ -L "$file" ] || continue
+    target=$(readlink "$file" 2>/dev/null || true)
+    if [[ "$target" == /mnt/mac/* ]]; then
+      echo "  Removing $(basename "$file")"
+      rm "$file"
+      any_removed=true
+    fi
+  done
+fi
+
+if [ "$any_removed" = false ]; then
+  echo "  None found"
+fi
+
+# 3. Destroy SSH agent socket (prevents signing with host keys)
+echo ""
+echo "SSH agent:"
+if [ -S "$orbstack_run/host-ssh-agent.sock" ]; then
+  sudo rm -f "$orbstack_run/host-ssh-agent.sock"
+  echo "  Removed host-ssh-agent.sock"
+else
+  echo "  Already removed"
+fi
+unset SSH_AUTH_SOCK 2>/dev/null || true
+
+# 4. Destroy other integration sockets (clipboard, host control, etc.)
+echo ""
+echo "Host integration sockets:"
+sockets_removed=false
+
+for sock in hcontrol.sock hostssh.sock ssh-agent-proxy.sock; do
+  if [ -S "$orbstack_run/$sock" ]; then
+    sudo rm -f "$orbstack_run/$sock"
+    echo "  Removed $sock"
+    sockets_removed=true
+  fi
+done
+
+if [ "$sockets_removed" = false ]; then
+  echo "  Already removed"
+fi
+
+# 5. Disable Mac integration binaries (pbcopy, osascript, screencapture, etc.)
+echo ""
+echo "Mac integration binaries:"
+if [ -x "$orbstack_bin/macctl" ]; then
+  sudo chmod 000 "$orbstack_bin/macctl"
+  echo "  Disabled macctl (pbcopy, osascript, screencapture, etc.)"
+else
+  echo "  Already disabled"
+fi
+
+echo ""
+echo "Done. Run 'sandbox-key' to generate an SSH key for this machine."
+echo ""
+echo "Note: Network access to host.orb.internal is still possible."
+echo "      The agent has sudo, so these changes are not a security boundary."

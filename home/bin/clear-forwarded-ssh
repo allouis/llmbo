@@ -3,6 +3,14 @@ set -euo pipefail
 
 # Removes access to your forwarded SSH key.
 
+# Check for OrbStack - it uses symlinked keys, not agent forwarding
+if mount | grep -q 'type virtiofs'; then
+  echo "OrbStack detected. Your SSH keys are symlinked from the host, not forwarded."
+  echo ""
+  echo "Run 'isolate-orbstack' to unmount host filesystem and remove symlinks."
+  exit 1
+fi
+
 socket="$HOME/.ssh/agent_socket"
 
 if [ ! -e "$socket" ] && [ -z "${SSH_AUTH_SOCK:-}" ]; then

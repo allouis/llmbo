@@ -77,6 +77,18 @@ If you do use agent forwarding, run `clear-forwarded-ssh` before starting agent 
 
 After `clear-forwarded-ssh`, agents can still push to already-cloned repos via HTTPS if GH_TOKEN is set.
 
+### OrbStack users
+
+OrbStack is designed for convenience, not isolation. It exposes your Mac's entire
+filesystem, SSH agent, clipboard, and more to the VM. Run `isolate-orbstack` to
+remove these integration points:
+
+    isolate-orbstack
+
+This unmounts Mac filesystem mounts, removes SSH agent access, and disables Mac
+integration binaries. However, the agent has sudo and could potentially undo these
+changes. For true isolation, use a real VM or cloud instance instead of OrbStack.
+
 ### Recommendations for sensitive work
 
 - Use `sandbox-key` instead of SSH agent forwarding

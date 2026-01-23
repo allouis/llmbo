@@ -5,6 +5,30 @@ set -euo pipefail
 
 key_path="$HOME/.ssh/id_ed25519"
 
+# Check for OrbStack symlinks pointing to host filesystem
+if [ -d "$HOME/.ssh" ]; then
+  for file in "$HOME/.ssh"/*; do
+    [ -L "$file" ] || continue
+    target=$(readlink "$file" 2>/dev/null || true)
+    if [[ "$target" == /mnt/mac/* ]]; then
+      echo "Error: Found SSH keys symlinked to host filesystem (OrbStack)."
+      echo ""
+      echo "Your host's SSH keys are exposed to this VM. Run this first:"
+      echo ""
+      echo "  isolate-orbstack"
+      echo ""
+      exit 1
+    fi
+  done
+fi
+
+# Check if key exists as a symlink (broken or otherwise) - remove it
+if [ -L "$key_path" ]; then
+  echo "Removing symlink at $key_path..."
+  rm "$key_path"
+  [ -L "$key_path.pub" ] && rm "$key_path.pub"
+fi
+
 if [ ! -f "$key_path" ]; then
   echo "Generating SSH key..."
   mkdir -p "$HOME/.ssh"

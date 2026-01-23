@@ -92,7 +92,8 @@
         echo -e "  \e[1mopencode\e[0m               OpenCode $(opencode --version 2>/dev/null | head -1 || echo "")"
         echo -e "  \e[1mupdate-agents\e[0m          Update agents to latest"
         echo -e "  \e[1mupdate-system\e[0m          Update all packages"
-        echo -e "  \e[1msandbox-key\e[0m            Get SSH key for this machine"
+        echo -e "  \e[1msandbox-key\e[0m            Generate SSH key for this machine"
+        echo -e "  \e[1misolate-orbstack\e[0m       Unmount host filesystem (OrbStack)"
         echo ""
         echo -e "  \e[1mtmux new -s work\e[0m       Start persistent session"
         echo -e "  \e[1mtmux attach\e[0m            Reconnect to session"
@@ -100,15 +101,24 @@
         echo -e "  \e[2mdocker is aliased to podman (rootless)\e[0m"
         echo ""
 
-        # Note about SSH key forwarding (check if agent is actually accessible)
-        if ssh-add -l &>/dev/null; then
+        # Check for OrbStack
+        if [ -d /opt/orbstack-guest ]; then
+          if mount | grep -q 'type virtiofs'; then
+            echo -e "  \e[31;1mWarning: OrbStack host filesystem is mounted.\e[0m"
+            echo -e "  \e[2mYour Mac's home directory, SSH keys, and secrets are exposed.\e[0m"
+            echo -e "  \e[2mRun \e[0misolate-orbstack\e[2m to remove host access.\e[0m"
+          else
+            echo -e "  \e[33mOrbStack VM (isolated)\e[0m"
+          fi
+          echo ""
+          echo -e "  \e[2mOrbStack is not designed for isolation.\e[0m"
+          echo -e "  \e[2mA real VM or cloud instance is better.\e[0m"
+          echo ""
+        # Standard SSH agent forwarding (non-OrbStack)
+        elif ssh-add -l &>/dev/null; then
           echo -e "  \e[33mSSH key forwarding active.\e[0m"
           echo -e "  \e[2mGood for cloning repos, but it goes away when you disconnect.\e[0m"
-          if [[ "$SSH_AUTH_SOCK" == *orbstack* ]]; then
-            echo -e "  \e[2mOrbStack always forwards your SSH keys.\e[0m"
-          fi
           echo -e "  \e[2mRun \e[0msandbox-key\e[2m to generate a permanent key for this machine.\e[0m"
-          echo -e "  \e[2mRun \e[0mclear-forwarded-ssh\e[2m to remove access to your forwarded keys.\e[0m"
           echo ""
         fi
       fi
