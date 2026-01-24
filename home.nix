@@ -88,8 +88,8 @@
         echo ""
         echo "  Welcome to llmbo"
         echo ""
-        echo -e "  \e[1mclaude\e[0m                 Claude Code $(claude --version 2>/dev/null | cut -d' ' -f1)"
-        echo -e "  \e[1mopencode\e[0m               OpenCode $(opencode --version 2>/dev/null | head -1 || echo "")"
+        echo -e "  \e[1mclaude\e[0m                 Claude Code CLI"
+        echo -e "  \e[1mopencode\e[0m               OpenCode CLI"
         echo -e "  \e[1mupdate-agents\e[0m          Update agents to latest"
         echo -e "  \e[1mupdate-system\e[0m          Update all packages"
         echo -e "  \e[1msandbox-key\e[0m            Generate SSH key for this machine"
@@ -103,7 +103,7 @@
 
         # Check for OrbStack
         if [ -d /opt/orbstack-guest ]; then
-          if mount | grep -q 'type virtiofs'; then
+          if [ -d /Users ]; then
             echo -e "  \e[31;1mWarning: OrbStack host filesystem is mounted.\e[0m"
             echo -e "  \e[2mYour Mac's home directory, SSH keys, and secrets are exposed.\e[0m"
             echo -e "  \e[2mRun \e[0misolate-orbstack\e[2m to remove host access.\e[0m"

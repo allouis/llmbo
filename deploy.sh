@@ -90,6 +90,12 @@ error() {
   exit 1
 }
 
+# Get max lastModified timestamp from a flake.lock file
+get_flake_max_timestamp() {
+  local lock_file="$1"
+  jq '[.nodes[].locked.lastModified // 0] | max' "$lock_file" 2>/dev/null || echo 0
+}
+
 # --- Main functions ---
 print_header() {
   echo ""
@@ -351,7 +357,24 @@ setup_config() {
 
   # Copy flake files
   ssh "$TARGET_HOST" "mkdir -p '$remote_home/.config/home-manager'"
-  scp -q "$script_dir"/{flake.nix,flake.lock,home.nix} "$TARGET_HOST:$remote_home/.config/home-manager/"
+
+  # Always copy flake.nix and home.nix
+  scp -q "$script_dir"/{flake.nix,home.nix} "$TARGET_HOST:$remote_home/.config/home-manager/"
+
+  # Smart sync for flake.lock - only push if local is newer
+  local local_ts remote_lock remote_ts
+  local_ts=$(get_flake_max_timestamp "$script_dir/flake.lock")
+  remote_lock="$remote_home/.config/home-manager/flake.lock"
+  remote_ts=$(ssh "$TARGET_HOST" "cat '$remote_lock' 2>/dev/null" | get_flake_max_timestamp /dev/stdin || echo 0)
+
+  if [[ "$local_ts" -gt "$remote_ts" ]]; then
+    scp -q "$script_dir/flake.lock" "$TARGET_HOST:$remote_home/.config/home-manager/"
+    info "Pushed local flake.lock (newer than remote)"
+  elif [[ "$remote_ts" -gt "$local_ts" ]]; then
+    info "Keeping remote flake.lock (newer than local)"
+  else
+    info "flake.lock versions match"
+  fi
 
   # Secrets file (if exists locally)
   if [[ -f "$script_dir/secrets.env" ]]; then
