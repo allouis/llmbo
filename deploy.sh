@@ -141,6 +141,69 @@ detect_system() {
   echo ""
 }
 
+detect_remote_secrets() {
+  # Fetch existing secrets from remote to avoid re-prompting
+  local remote_home
+  remote_home=$(ssh "$TARGET_HOST" "echo \$HOME")
+  local remote_secrets
+  remote_secrets=$(ssh "$TARGET_HOST" "cat '$remote_home/.secrets.env' 2>/dev/null" || true)
+
+  if [[ -n "$remote_secrets" ]]; then
+    # Extract values using grep/sed (handles KEY=value and KEY="value")
+    local extract_value='s/^[^=]*="\{0,1\}\([^"]*\)"\{0,1\}$/\1/'
+
+    if [[ -z "$GH_TOKEN" ]]; then
+      local val
+      val=$(echo "$remote_secrets" | grep "^GH_TOKEN=" | sed "$extract_value")
+      if [[ -n "$val" ]]; then
+        GH_TOKEN="$val"
+        GH_TOKEN_SOURCE="remote"
+        REMOTE_GH_TOKEN=1
+      fi
+    fi
+
+    if [[ -z "$LINEAR_API_KEY" ]]; then
+      local val
+      val=$(echo "$remote_secrets" | grep "^LINEAR_API_KEY=" | sed "$extract_value")
+      if [[ -n "$val" ]]; then
+        LINEAR_API_KEY="$val"
+        LINEAR_KEY_SOURCE="remote"
+        REMOTE_LINEAR_KEY=1
+      fi
+    fi
+
+    if [[ -z "$CONTEXT7_API_KEY" ]]; then
+      local val
+      val=$(echo "$remote_secrets" | grep "^CONTEXT7_API_KEY=" | sed "$extract_value")
+      if [[ -n "$val" ]]; then
+        CONTEXT7_API_KEY="$val"
+        CONTEXT7_KEY_SOURCE="remote"
+        REMOTE_CONTEXT7_KEY=1
+      fi
+    fi
+
+    if [[ -z "$GIT_USER_NAME" ]]; then
+      local val
+      val=$(echo "$remote_secrets" | grep "^GIT_AUTHOR_NAME=" | sed "$extract_value")
+      if [[ -n "$val" ]]; then
+        GIT_USER_NAME="$val"
+        GIT_NAME_SOURCE="remote"
+        REMOTE_GIT_NAME=1
+      fi
+    fi
+
+    if [[ -z "$GIT_USER_EMAIL" ]]; then
+      local val
+      val=$(echo "$remote_secrets" | grep "^GIT_AUTHOR_EMAIL=" | sed "$extract_value")
+      if [[ -n "$val" ]]; then
+        GIT_USER_EMAIL="$val"
+        GIT_EMAIL_SOURCE="remote"
+        REMOTE_GIT_EMAIL=1
+      fi
+    fi
+  fi
+}
+
 detect_api_keys() {
   # Try to detect API keys from local environment and config files
 
@@ -210,7 +273,14 @@ prompt_git_identity() {
     return
   fi
 
-  # Git identity
+  # Git identity already on remote - skip prompts entirely
+  if [[ -n "${REMOTE_GIT_NAME:-}" && -n "${REMOTE_GIT_EMAIL:-}" ]]; then
+    success "Git identity already configured on remote ($GIT_USER_NAME <$GIT_USER_EMAIL>)"
+    echo ""
+    return
+  fi
+
+  # Git identity from local source
   if [[ -n "$GIT_USER_NAME" && -n "$GIT_USER_EMAIL" ]]; then
     echo "Git identity detected from ${GIT_NAME_SOURCE:-config}:"
     echo "  Name:  $GIT_USER_NAME"
@@ -244,11 +314,14 @@ prompt_api_keys() {
     return
   fi
 
-  # Try to auto-detect keys first
+  # Try to auto-detect keys first (remote was already checked)
   detect_api_keys
 
   # GitHub token
-  if [[ -n "$GH_TOKEN" && -n "${GH_TOKEN_SOURCE:-}" ]]; then
+  if [[ -n "${REMOTE_GH_TOKEN:-}" ]]; then
+    success "GitHub token already configured on remote"
+    echo ""
+  elif [[ -n "$GH_TOKEN" && -n "${GH_TOKEN_SOURCE:-}" ]]; then
     echo "GitHub token detected from $GH_TOKEN_SOURCE"
     read -rp "Use this token? [Y/n]: " confirm
     if [[ "$confirm" =~ ^[Nn] ]]; then
@@ -256,7 +329,7 @@ prompt_api_keys() {
     fi
     echo ""
   fi
-  if [[ -z "$GH_TOKEN" ]]; then
+  if [[ -z "$GH_TOKEN" && -z "${REMOTE_GH_TOKEN:-}" ]]; then
     echo "GitHub CLI authentication (optional)"
     echo ""
     echo "To enable 'gh' commands, provide a Personal Access Token."
@@ -269,7 +342,10 @@ prompt_api_keys() {
   fi
 
   # Linear API key
-  if [[ -n "$LINEAR_API_KEY" && -n "${LINEAR_KEY_SOURCE:-}" ]]; then
+  if [[ -n "${REMOTE_LINEAR_KEY:-}" ]]; then
+    success "Linear API key already configured on remote"
+    echo ""
+  elif [[ -n "$LINEAR_API_KEY" && -n "${LINEAR_KEY_SOURCE:-}" ]]; then
     echo "Linear API key detected from $LINEAR_KEY_SOURCE"
     read -rp "Use this key? [Y/n]: " confirm
     if [[ "$confirm" =~ ^[Nn] ]]; then
@@ -277,7 +353,7 @@ prompt_api_keys() {
     fi
     echo ""
   fi
-  if [[ -z "$LINEAR_API_KEY" ]]; then
+  if [[ -z "$LINEAR_API_KEY" && -z "${REMOTE_LINEAR_KEY:-}" ]]; then
     echo "Linear MCP (optional)"
     echo ""
     echo "To enable issue tracking via Linear MCP, provide an API key."
@@ -290,7 +366,10 @@ prompt_api_keys() {
   fi
 
   # Context7 API key
-  if [[ -n "$CONTEXT7_API_KEY" && -n "${CONTEXT7_KEY_SOURCE:-}" ]]; then
+  if [[ -n "${REMOTE_CONTEXT7_KEY:-}" ]]; then
+    success "Context7 API key already configured on remote"
+    echo ""
+  elif [[ -n "$CONTEXT7_API_KEY" && -n "${CONTEXT7_KEY_SOURCE:-}" ]]; then
     echo "Context7 API key detected from $CONTEXT7_KEY_SOURCE"
     read -rp "Use this key? [Y/n]: " confirm
     if [[ "$confirm" =~ ^[Nn] ]]; then
@@ -298,7 +377,7 @@ prompt_api_keys() {
     fi
     echo ""
   fi
-  if [[ -z "$CONTEXT7_API_KEY" ]]; then
+  if [[ -z "$CONTEXT7_API_KEY" && -z "${REMOTE_CONTEXT7_KEY:-}" ]]; then
     echo "Context7 MCP (optional)"
     echo ""
     echo "To enable docs lookup via Context7 MCP, provide an API key."
@@ -376,33 +455,85 @@ setup_config() {
     info "flake.lock versions match"
   fi
 
-  # Secrets file (if exists locally)
+  # Merge local secrets.env with remote (if local exists)
+  # Local file is added first, then remote values are preserved (remote wins on conflict)
   if [[ -f "$script_dir/secrets.env" ]]; then
-    scp -q "$script_dir/secrets.env" "$TARGET_HOST:$remote_home/.secrets.env"
+    ssh "$TARGET_HOST" "
+      if [ -f '$remote_home/.secrets.env' ]; then
+        # Merge: start with local, then apply remote on top (remote wins)
+        cat > '$remote_home/.secrets.env.new' << 'LOCALEOF'
+$(cat "$script_dir/secrets.env")
+LOCALEOF
+        # Append remote values, which will be deduped below
+        cat '$remote_home/.secrets.env' >> '$remote_home/.secrets.env.new'
+        # Keep last occurrence of each key (remote wins)
+        tac '$remote_home/.secrets.env.new' | awk -F= '!seen[\$1]++' | tac > '$remote_home/.secrets.env'
+        rm -f '$remote_home/.secrets.env.new'
+      else
+        cat > '$remote_home/.secrets.env' << 'LOCALEOF'
+$(cat "$script_dir/secrets.env")
+LOCALEOF
+      fi
+    "
   fi
 
-  # Append API keys to secrets (if provided)
-  if [[ -n "$GH_TOKEN" ]]; then
-    ssh "$TARGET_HOST" "echo 'GH_TOKEN=$GH_TOKEN' >> '$remote_home/.secrets.env'"
+  # Upsert API keys (only if not already on remote)
+  # Uses sed to update existing or append if not found
+  if [[ -n "$GH_TOKEN" && -z "${REMOTE_GH_TOKEN:-}" ]]; then
+    ssh "$TARGET_HOST" "
+      touch '$remote_home/.secrets.env'
+      if grep -q '^GH_TOKEN=' '$remote_home/.secrets.env'; then
+        sed -i 's|^GH_TOKEN=.*|GH_TOKEN=$GH_TOKEN|' '$remote_home/.secrets.env'
+      else
+        echo 'GH_TOKEN=$GH_TOKEN' >> '$remote_home/.secrets.env'
+      fi
+    "
   fi
-  if [[ -n "$LINEAR_API_KEY" ]]; then
-    ssh "$TARGET_HOST" "echo 'LINEAR_API_KEY=$LINEAR_API_KEY' >> '$remote_home/.secrets.env'"
+  if [[ -n "$LINEAR_API_KEY" && -z "${REMOTE_LINEAR_KEY:-}" ]]; then
+    ssh "$TARGET_HOST" "
+      touch '$remote_home/.secrets.env'
+      if grep -q '^LINEAR_API_KEY=' '$remote_home/.secrets.env'; then
+        sed -i 's|^LINEAR_API_KEY=.*|LINEAR_API_KEY=$LINEAR_API_KEY|' '$remote_home/.secrets.env'
+      else
+        echo 'LINEAR_API_KEY=$LINEAR_API_KEY' >> '$remote_home/.secrets.env'
+      fi
+    "
   fi
-  if [[ -n "$CONTEXT7_API_KEY" ]]; then
-    ssh "$TARGET_HOST" "echo 'CONTEXT7_API_KEY=$CONTEXT7_API_KEY' >> '$remote_home/.secrets.env'"
+  if [[ -n "$CONTEXT7_API_KEY" && -z "${REMOTE_CONTEXT7_KEY:-}" ]]; then
+    ssh "$TARGET_HOST" "
+      touch '$remote_home/.secrets.env'
+      if grep -q '^CONTEXT7_API_KEY=' '$remote_home/.secrets.env'; then
+        sed -i 's|^CONTEXT7_API_KEY=.*|CONTEXT7_API_KEY=$CONTEXT7_API_KEY|' '$remote_home/.secrets.env'
+      else
+        echo 'CONTEXT7_API_KEY=$CONTEXT7_API_KEY' >> '$remote_home/.secrets.env'
+      fi
+    "
   fi
 
-  # Append git identity to secrets (if provided)
-  # Using GIT_AUTHOR_* and GIT_COMMITTER_* env vars which git uses automatically
-  # Values are double-quoted in the file so apostrophes don't break sourcing
-  # Piping avoids shell quoting issues with special characters in names
-  if [[ -n "$GIT_USER_NAME" ]]; then
-    printf 'GIT_AUTHOR_NAME="%s"\nGIT_COMMITTER_NAME="%s"\n' "$GIT_USER_NAME" "$GIT_USER_NAME" | \
-      ssh "$TARGET_HOST" "cat >> '$remote_home/.secrets.env'"
+  # Upsert git identity (only if not already on remote)
+  if [[ -n "$GIT_USER_NAME" && -z "${REMOTE_GIT_NAME:-}" ]]; then
+    ssh "$TARGET_HOST" "
+      touch '$remote_home/.secrets.env'
+      for key in GIT_AUTHOR_NAME GIT_COMMITTER_NAME; do
+        if grep -q \"^\$key=\" '$remote_home/.secrets.env'; then
+          sed -i \"s|^\$key=.*|\$key=\\\"$GIT_USER_NAME\\\"|\" '$remote_home/.secrets.env'
+        else
+          echo \"\$key=\\\"$GIT_USER_NAME\\\"\" >> '$remote_home/.secrets.env'
+        fi
+      done
+    "
   fi
-  if [[ -n "$GIT_USER_EMAIL" ]]; then
-    printf 'GIT_AUTHOR_EMAIL="%s"\nGIT_COMMITTER_EMAIL="%s"\n' "$GIT_USER_EMAIL" "$GIT_USER_EMAIL" | \
-      ssh "$TARGET_HOST" "cat >> '$remote_home/.secrets.env'"
+  if [[ -n "$GIT_USER_EMAIL" && -z "${REMOTE_GIT_EMAIL:-}" ]]; then
+    ssh "$TARGET_HOST" "
+      touch '$remote_home/.secrets.env'
+      for key in GIT_AUTHOR_EMAIL GIT_COMMITTER_EMAIL; do
+        if grep -q \"^\$key=\" '$remote_home/.secrets.env'; then
+          sed -i \"s|^\$key=.*|\$key=\\\"$GIT_USER_EMAIL\\\"|\" '$remote_home/.secrets.env'
+        else
+          echo \"\$key=\\\"$GIT_USER_EMAIL\\\"\" >> '$remote_home/.secrets.env'
+        fi
+      done
+    "
   fi
 
   # Ensure secrets file has correct permissions
@@ -491,6 +622,7 @@ main() {
   print_header
   prompt_target_host
   detect_system
+  detect_remote_secrets
   detect_git_identity
   prompt_api_keys
   prompt_git_identity
