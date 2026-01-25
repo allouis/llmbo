@@ -7,21 +7,29 @@ No hardening, just reproducible environments on throwaway machines.
 
 ## Quickstart
 
-    ./deploy.sh --host user@target
+    ./deploy.sh user@target              # home-manager (preserves OS)
+    ./deploy.sh --nixos root@target      # nixos-anywhere (replaces OS)
 
 ## How it works
 
-llmbo uses Nix to install packages without touching the host OS. Everything lives in `/nix` and the home directory.
+**Home-manager mode** (default): Uses Nix to install packages without touching the
+host OS. Everything lives in `/nix` and the home directory.
+
+**NixOS mode** (`--nixos`): Replaces the entire OS with NixOS via nixos-anywhere.
+Use this for disposable remote servers where you want full control.
 
 | File | What it does |
 |------|--------------|
-| `home.nix` | All configuration: packages, shell aliases, environment |
-| `home/` | Files copied to `~/` on the target (add your dotfiles here) |
+| `home-manager/home.nix` | Home-manager config: packages, shell, environment |
+| `nixos/configuration.nix` | NixOS system config (for --nixos mode) |
+| `shared/packages.nix` | Packages common to both modes |
+| `home/` | Files copied to `~/` on the target |
 | `secrets.env` | API keys, copied to `~/.secrets.env` on target |
 
 ## Customizing
 
-Edit `home.nix` to add packages or change settings. Run `./deploy.sh` again to apply.
+Edit `home-manager/home.nix` (or `nixos/configuration.nix` for --nixos mode)
+to add packages or change settings. Run `./deploy.sh` again to apply.
 
 Add files to `home/` and they'll appear in the target's home directory.
 

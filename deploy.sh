@@ -12,14 +12,17 @@ NC='\033[0m'
 trap 'echo -e "${RED}Deployment failed at line $LINENO${NC}" >&2' ERR
 
 # --- State ---
+DEPLOY_MODE="home-manager"  # or "nixos"
 TARGET_HOST=""
 ARCH=""
+FLAKE_TARGET=""
 GH_TOKEN=""
 LINEAR_API_KEY=""
 CONTEXT7_API_KEY=""
 GIT_USER_NAME=""
 GIT_USER_EMAIL=""
 FORCE_CONFIGS=""
+FORCE_REINSTALL=""
 
 # --- Argument parsing ---
 usage() {
@@ -28,18 +31,22 @@ llmbo — put your LLM agents in limbo
 
 Installs Nix and configures LLM agent tools on a remote machine.
 
+Modes:
+  (default)              Home-manager mode: preserves existing OS, adds Nix
+  --nixos                NixOS mode: replaces entire OS via nixos-anywhere
+
 Options:
   -H, --host HOST        Target host (e.g., root@192.168.1.100)
   -t, --gh-token TOKEN   GitHub personal access token
       --linear-key KEY   Linear API key (for issue tracking MCP)
       --context7-key KEY Context7 API key (for docs lookup MCP)
       --force-configs    Reset config files (.claude.json, opencode.json)
+      --force            Force reinstall (NixOS mode only)
   -h, --help             Show this help message
 
 Examples:
-  $(basename "$0")                        # Interactive mode
-  $(basename "$0") --host nixos@myvm      # Non-interactive, skip API keys
-  $(basename "$0") -H user@host -t TOKEN  # Fully automated
+  $(basename "$0") root@192.168.1.100           # Home-manager (default)
+  $(basename "$0") --nixos root@192.168.1.100   # Full NixOS replacement
 EOF
   exit 0
 }
@@ -47,6 +54,10 @@ EOF
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case $1 in
+      --nixos)
+        DEPLOY_MODE="nixos"
+        shift
+        ;;
       -H|--host)
         [[ -z "${2:-}" || "$2" == -* ]] && error "--host requires a value"
         TARGET_HOST="$2"
@@ -72,11 +83,21 @@ parse_args() {
         FORCE_CONFIGS=1
         shift
         ;;
+      --force)
+        FORCE_REINSTALL=1
+        shift
+        ;;
       -h|--help)
         usage
         ;;
-      *)
+      -*)
         error "Unknown option: $1"
+        ;;
+      *)
+        # Positional argument - treat as host
+        TARGET_HOST="$1"
+        HOST_FROM_FLAG=1
+        shift
         ;;
     esac
   done
@@ -96,6 +117,16 @@ error() {
   exit 1
 }
 
+# Check if target has llmbo-installed NixOS (marker file present)
+is_llmbo_nixos() {
+  ssh "$TARGET_HOST" "[ -f /etc/llmbo ]" 2>/dev/null
+}
+
+# Check if target has any NixOS installation
+is_any_nixos() {
+  ssh "$TARGET_HOST" "[ -f /etc/NIXOS ]" 2>/dev/null
+}
+
 # Get max lastModified timestamp from a flake.lock file
 get_flake_max_timestamp() {
   local lock_file="$1"
@@ -106,9 +137,6 @@ get_flake_max_timestamp() {
 print_header() {
   echo ""
   echo -e "${BOLD}Welcome to llmbo${NC}"
-  echo ""
-  echo "This will install Nix and LLM agent tools on the target machine."
-  echo "The host OS is preserved — only Nix and home-manager are added."
   echo ""
 }
 
@@ -143,7 +171,37 @@ detect_system() {
       ;;
   esac
 
-  success "$ARCH"
+  # For NixOS mode, also detect the primary disk
+  if [[ "$DEPLOY_MODE" == "nixos" ]]; then
+    # Detect primary disk (first disk by name)
+    local disk_name
+    disk_name=$(ssh "$TARGET_HOST" "lsblk -d -n -o NAME,TYPE | awk '\$2==\"disk\"{print \$1; exit}'")
+
+    # Map disk name to type for flake target
+    local disk_type
+    case "$disk_name" in
+      sd*) disk_type="sda" ;;
+      vd*) disk_type="vda" ;;
+      nvme*) disk_type="nvme" ;;
+      *)
+        echo ""
+        error "Unknown disk type: $disk_name"
+        ;;
+    esac
+
+    # Construct flake target: agent-{arch}-{disk_type}
+    local arch_short
+    if [[ "$ARCH" == "aarch64-linux" ]]; then
+      arch_short="aarch64"
+    else
+      arch_short="x86_64"
+    fi
+    FLAKE_TARGET="agent-${arch_short}-${disk_type}"
+
+    success "$ARCH, disk: /dev/$disk_name (NixOS: $FLAKE_TARGET)"
+  else
+    success "$ARCH"
+  fi
   echo ""
 }
 
@@ -160,7 +218,7 @@ detect_remote_secrets() {
 
     if [[ -z "$GH_TOKEN" ]]; then
       local val
-      val=$(echo "$remote_secrets" | grep "^GH_TOKEN=" | sed "$extract_value")
+      val=$(echo "$remote_secrets" | grep "^GH_TOKEN=" | sed "$extract_value" || true)
       if [[ -n "$val" ]]; then
         GH_TOKEN="$val"
         GH_TOKEN_SOURCE="remote"
@@ -170,7 +228,7 @@ detect_remote_secrets() {
 
     if [[ -z "$LINEAR_API_KEY" ]]; then
       local val
-      val=$(echo "$remote_secrets" | grep "^LINEAR_API_KEY=" | sed "$extract_value")
+      val=$(echo "$remote_secrets" | grep "^LINEAR_API_KEY=" | sed "$extract_value" || true)
       if [[ -n "$val" ]]; then
         LINEAR_API_KEY="$val"
         LINEAR_KEY_SOURCE="remote"
@@ -180,7 +238,7 @@ detect_remote_secrets() {
 
     if [[ -z "$CONTEXT7_API_KEY" ]]; then
       local val
-      val=$(echo "$remote_secrets" | grep "^CONTEXT7_API_KEY=" | sed "$extract_value")
+      val=$(echo "$remote_secrets" | grep "^CONTEXT7_API_KEY=" | sed "$extract_value" || true)
       if [[ -n "$val" ]]; then
         CONTEXT7_API_KEY="$val"
         CONTEXT7_KEY_SOURCE="remote"
@@ -190,7 +248,7 @@ detect_remote_secrets() {
 
     if [[ -z "$GIT_USER_NAME" ]]; then
       local val
-      val=$(echo "$remote_secrets" | grep "^GIT_AUTHOR_NAME=" | sed "$extract_value")
+      val=$(echo "$remote_secrets" | grep "^GIT_AUTHOR_NAME=" | sed "$extract_value" || true)
       if [[ -n "$val" ]]; then
         GIT_USER_NAME="$val"
         GIT_NAME_SOURCE="remote"
@@ -200,7 +258,7 @@ detect_remote_secrets() {
 
     if [[ -z "$GIT_USER_EMAIL" ]]; then
       local val
-      val=$(echo "$remote_secrets" | grep "^GIT_AUTHOR_EMAIL=" | sed "$extract_value")
+      val=$(echo "$remote_secrets" | grep "^GIT_AUTHOR_EMAIL=" | sed "$extract_value" || true)
       if [[ -n "$val" ]]; then
         GIT_USER_EMAIL="$val"
         GIT_EMAIL_SOURCE="remote"
@@ -211,23 +269,47 @@ detect_remote_secrets() {
 }
 
 detect_api_keys() {
-  # Try to detect API keys from local environment and config files
+  # Try to detect API keys from local secrets.env, environment, and config files
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local local_secrets=""
 
-  # GitHub: check GST_TOKEN, then GH_TOKEN
+  # Load local secrets.env if it exists
+  if [[ -f "$script_dir/secrets.env" ]]; then
+    local_secrets=$(cat "$script_dir/secrets.env")
+  fi
+
+  # GitHub: check local secrets.env, then GST_TOKEN, then GH_TOKEN env
   if [[ -z "$GH_TOKEN" ]]; then
-    if [[ -n "${GST_TOKEN:-}" ]]; then
+    if [[ -n "$local_secrets" ]]; then
+      local val
+      val=$(echo "$local_secrets" | grep "^GH_TOKEN=" | sed 's/^[^=]*="\{0,1\}\([^"]*\)"\{0,1\}$/\1/' || true)
+      if [[ -n "$val" ]]; then
+        GH_TOKEN="$val"
+        GH_TOKEN_SOURCE="local secrets.env"
+      fi
+    fi
+    if [[ -z "$GH_TOKEN" ]] && [[ -n "${GST_TOKEN:-}" ]]; then
       GH_TOKEN="$GST_TOKEN"
       GH_TOKEN_SOURCE="GST_TOKEN env"
-    elif [[ -n "${GH_TOKEN:-}" ]]; then
+    elif [[ -z "$GH_TOKEN" ]] && [[ -n "${GH_TOKEN:-}" ]]; then
       GH_TOKEN_SOURCE="GH_TOKEN env"
     fi
   fi
 
-  # Linear: check env, then Claude MCP config
+  # Linear: check local secrets.env, then env, then Claude MCP config
   if [[ -z "$LINEAR_API_KEY" ]]; then
-    if [[ -n "${LINEAR_API_KEY:-}" ]]; then
+    if [[ -n "$local_secrets" ]]; then
+      local val
+      val=$(echo "$local_secrets" | grep "^LINEAR_API_KEY=" | sed 's/^[^=]*="\{0,1\}\([^"]*\)"\{0,1\}$/\1/' || true)
+      if [[ -n "$val" ]]; then
+        LINEAR_API_KEY="$val"
+        LINEAR_KEY_SOURCE="local secrets.env"
+      fi
+    fi
+    if [[ -z "$LINEAR_API_KEY" ]] && [[ -n "${LINEAR_API_KEY:-}" ]]; then
       LINEAR_KEY_SOURCE="LINEAR_API_KEY env"
-    elif [[ -f "$HOME/.claude.json" ]]; then
+    elif [[ -z "$LINEAR_API_KEY" ]] && [[ -f "$HOME/.claude.json" ]]; then
       local key
       key=$(jq -r '.mcpServers.linear.env.LINEAR_API_KEY // empty' "$HOME/.claude.json" 2>/dev/null)
       if [[ -n "$key" ]]; then
@@ -237,11 +319,19 @@ detect_api_keys() {
     fi
   fi
 
-  # Context7: check env, then Claude MCP config
+  # Context7: check local secrets.env, then env, then Claude MCP config
   if [[ -z "$CONTEXT7_API_KEY" ]]; then
-    if [[ -n "${CONTEXT7_API_KEY:-}" ]]; then
+    if [[ -n "$local_secrets" ]]; then
+      local val
+      val=$(echo "$local_secrets" | grep "^CONTEXT7_API_KEY=" | sed 's/^[^=]*="\{0,1\}\([^"]*\)"\{0,1\}$/\1/' || true)
+      if [[ -n "$val" ]]; then
+        CONTEXT7_API_KEY="$val"
+        CONTEXT7_KEY_SOURCE="local secrets.env"
+      fi
+    fi
+    if [[ -z "$CONTEXT7_API_KEY" ]] && [[ -n "${CONTEXT7_API_KEY:-}" ]]; then
       CONTEXT7_KEY_SOURCE="CONTEXT7_API_KEY env"
-    elif [[ -f "$HOME/.claude.json" ]]; then
+    elif [[ -z "$CONTEXT7_API_KEY" ]] && [[ -f "$HOME/.claude.json" ]]; then
       local key
       key=$(jq -r '.mcpServers.context7.env.CONTEXT7_API_KEY // empty' "$HOME/.claude.json" 2>/dev/null)
       if [[ -n "$key" ]]; then
@@ -443,8 +533,11 @@ setup_config() {
   # Copy flake files
   ssh "$TARGET_HOST" "mkdir -p '$remote_home/.config/home-manager'"
 
-  # Always copy flake.nix and home.nix
-  scp -q "$script_dir"/{flake.nix,home.nix} "$TARGET_HOST:$remote_home/.config/home-manager/"
+  # Always copy flake.nix and nix config files (preserving directory structure)
+  scp -q "$script_dir/flake.nix" "$TARGET_HOST:$remote_home/.config/home-manager/"
+  ssh "$TARGET_HOST" "mkdir -p '$remote_home/.config/home-manager/home-manager' '$remote_home/.config/home-manager/shared'"
+  scp -q "$script_dir/home-manager/home.nix" "$TARGET_HOST:$remote_home/.config/home-manager/home-manager/"
+  scp -q "$script_dir/shared/packages.nix" "$TARGET_HOST:$remote_home/.config/home-manager/shared/"
 
   # Smart sync for flake.lock - only push if local is newer
   local local_ts remote_lock remote_ts
@@ -634,27 +727,237 @@ apply_home_manager() {
   echo ""
 }
 
+# --- NixOS-anywhere deployment ---
+get_ssh_keys() {
+  info "Fetching SSH authorized keys from target..."
+  SSH_KEYS=$(ssh "$TARGET_HOST" "cat ~/.ssh/authorized_keys 2>/dev/null || true")
+  if [[ -z "$SSH_KEYS" ]]; then
+    error "No SSH authorized keys found on target. Cannot proceed with NixOS installation."
+  fi
+  success "Found authorized keys"
+  echo ""
+}
+
+deploy_nixos_anywhere() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  info "Installing NixOS via nixos-anywhere..."
+  echo ""
+  echo "This will:"
+  echo "  1. Build the NixOS configuration locally"
+  echo "  2. Boot the target into a temporary installer"
+  echo "  3. Partition and format the disk"
+  echo "  4. Install NixOS"
+  echo "  5. Reboot into the new system"
+  echo ""
+
+  # Create a temporary file with SSH keys for the NixOS config
+  local temp_keys
+  temp_keys=$(mktemp)
+  echo "$SSH_KEYS" > "$temp_keys"
+
+  # Build extra-files directory with SSH keys
+  local extra_files
+  extra_files=$(mktemp -d)
+  mkdir -p "$extra_files/root/.ssh"
+  mkdir -p "$extra_files/home/agent/.ssh"
+  cp "$temp_keys" "$extra_files/root/.ssh/authorized_keys"
+  cp "$temp_keys" "$extra_files/home/agent/.ssh/authorized_keys"
+  chmod 700 "$extra_files/root/.ssh" "$extra_files/home/agent/.ssh"
+  chmod 600 "$extra_files/root/.ssh/authorized_keys" "$extra_files/home/agent/.ssh/authorized_keys"
+
+  # Run nixos-anywhere
+  nix run github:nix-community/nixos-anywhere -- \
+    --flake "$script_dir#$FLAKE_TARGET" \
+    --extra-files "$extra_files" \
+    "$TARGET_HOST"
+
+  # Cleanup
+  rm -rf "$temp_keys" "$extra_files"
+
+  success "NixOS installation complete!"
+  echo ""
+
+  # Wait for the machine to come back up
+  info "Waiting for machine to reboot..."
+  sleep 10
+  local attempts=0
+  while ! ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$TARGET_HOST" "true" 2>/dev/null; do
+    attempts=$((attempts + 1))
+    if [[ $attempts -gt 30 ]]; then
+      error "Machine did not come back up after 5 minutes"
+    fi
+    echo -n "."
+    sleep 10
+  done
+  echo ""
+  success "Machine is back online!"
+  echo ""
+
+  # Write marker file to indicate llmbo installed this NixOS
+  ssh "$TARGET_HOST" "echo 'llmbo' > /etc/llmbo"
+}
+
+deploy_nixos_user_files() {
+  info "Deploying user files on NixOS..."
+
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  # Deploy to both root and agent user
+  for user_home in /root /home/agent; do
+    ssh "$TARGET_HOST" "mkdir -p '$user_home/bin'"
+
+    # Copy bin scripts
+    if [[ -d "$script_dir/home/bin" ]]; then
+      if ssh "$TARGET_HOST" "command -v rsync" >/dev/null 2>&1; then
+        rsync -aq --no-owner --no-group "$script_dir/home/bin/" "$TARGET_HOST:$user_home/bin/"
+      else
+        scp -rq "$script_dir/home/bin/." "$TARGET_HOST:$user_home/bin/"
+      fi
+    fi
+
+    # Copy config templates (same as home-manager mode now)
+    for file in .claude.json opencode.json; do
+      if [[ -f "$script_dir/home/$file" ]]; then
+        if [[ -n "$FORCE_CONFIGS" ]] || ! ssh "$TARGET_HOST" "[ -f '$user_home/$file' ]"; then
+          scp -q "$script_dir/home/$file" "$TARGET_HOST:$user_home/$file"
+        fi
+      fi
+    done
+
+    # Create/update secrets file
+    if [[ -n "$GH_TOKEN" || -n "$LINEAR_API_KEY" || -n "$CONTEXT7_API_KEY" || -n "$GIT_USER_NAME" || -n "$GIT_USER_EMAIL" ]]; then
+      local secrets_content=""
+      [[ -n "$GH_TOKEN" ]] && secrets_content+="GH_TOKEN=$GH_TOKEN"$'\n'
+      [[ -n "$LINEAR_API_KEY" ]] && secrets_content+="LINEAR_API_KEY=$LINEAR_API_KEY"$'\n'
+      [[ -n "$CONTEXT7_API_KEY" ]] && secrets_content+="CONTEXT7_API_KEY=$CONTEXT7_API_KEY"$'\n'
+      [[ -n "$GIT_USER_NAME" ]] && secrets_content+="GIT_AUTHOR_NAME=\"$GIT_USER_NAME\""$'\n'
+      [[ -n "$GIT_USER_NAME" ]] && secrets_content+="GIT_COMMITTER_NAME=\"$GIT_USER_NAME\""$'\n'
+      [[ -n "$GIT_USER_EMAIL" ]] && secrets_content+="GIT_AUTHOR_EMAIL=\"$GIT_USER_EMAIL\""$'\n'
+      [[ -n "$GIT_USER_EMAIL" ]] && secrets_content+="GIT_COMMITTER_EMAIL=\"$GIT_USER_EMAIL\""$'\n'
+
+      ssh "$TARGET_HOST" "cat > '$user_home/.secrets.env' << 'EOF'
+$secrets_content
+EOF
+chmod 600 '$user_home/.secrets.env'"
+    fi
+  done
+
+  # Fix ownership for agent user
+  ssh "$TARGET_HOST" "chown -R agent:users /home/agent"
+
+  success "User files deployed to both root and agent"
+  echo ""
+}
+
+rebuild_nixos() {
+  info "Rebuilding NixOS configuration..."
+
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  # Copy flake files to /etc/nixos
+  ssh "$TARGET_HOST" "mkdir -p /etc/nixos/nixos /etc/nixos/home-manager /etc/nixos/shared"
+  scp -q "$script_dir/flake.nix" "$TARGET_HOST:/etc/nixos/"
+  scp -q "$script_dir/nixos/configuration.nix" "$TARGET_HOST:/etc/nixos/nixos/"
+  scp -q "$script_dir/nixos/disk-config.nix" "$TARGET_HOST:/etc/nixos/nixos/"
+  scp -q "$script_dir/home-manager/home.nix" "$TARGET_HOST:/etc/nixos/home-manager/"
+  scp -q "$script_dir/shared/packages.nix" "$TARGET_HOST:/etc/nixos/shared/"
+
+  # Smart sync for flake.lock
+  local local_ts remote_ts
+  local_ts=$(get_flake_max_timestamp "$script_dir/flake.lock")
+  remote_ts=$(ssh "$TARGET_HOST" "cat /etc/nixos/flake.lock 2>/dev/null" | get_flake_max_timestamp /dev/stdin || echo 0)
+
+  if [[ "$local_ts" -gt "$remote_ts" ]]; then
+    scp -q "$script_dir/flake.lock" "$TARGET_HOST:/etc/nixos/"
+    info "Pushed local flake.lock (newer than remote)"
+  elif [[ "$remote_ts" -gt "$local_ts" ]]; then
+    info "Keeping remote flake.lock (newer than local)"
+  fi
+
+  # Rebuild NixOS
+  ssh "$TARGET_HOST" "nixos-rebuild switch --flake /etc/nixos#$FLAKE_TARGET"
+
+  success "NixOS rebuilt"
+  echo ""
+}
+
 # --- Main ---
 main() {
   parse_args "$@"
   print_header
   prompt_target_host
   detect_system
-  detect_remote_secrets
-  detect_git_identity
-  prompt_api_keys
-  prompt_git_identity
-  install_nix
-  setup_swap
-  setup_podman
-  setup_config
-  apply_home_manager
 
-  echo ""
-  success "Deployment complete!"
-  echo ""
-  echo "To clone your repos, connect with: ssh -A $TARGET_HOST"
-  echo "Then run sandbox-key to set up a permanent SSH key for this machine."
+  if [[ "$DEPLOY_MODE" == "nixos" ]]; then
+    if is_llmbo_nixos && [[ -z "$FORCE_REINSTALL" ]]; then
+      # Re-run: llmbo NixOS already installed, just update configs
+      info "llmbo NixOS detected — updating configs only"
+      echo ""
+      detect_remote_secrets
+      detect_git_identity
+      prompt_api_keys
+      prompt_git_identity
+      rebuild_nixos
+      deploy_nixos_user_files
+
+      echo ""
+      success "NixOS update complete!"
+      echo ""
+      echo "You can SSH in as root or agent:"
+      echo "  ssh -A root@${TARGET_HOST#*@}"
+      echo "  ssh -A agent@${TARGET_HOST#*@}"
+    elif is_any_nixos && [[ -z "$FORCE_REINSTALL" ]]; then
+      # Someone else's NixOS - don't touch
+      error "NixOS detected but not installed by llmbo. Use --force to reinstall."
+    else
+      # Fresh install (or --force reinstall)
+      echo -e "${RED}NixOS mode: This will WIPE and REPLACE the target machine's OS!${NC}"
+      echo "A complete NixOS installation will be performed via nixos-anywhere."
+      echo ""
+      if [[ -n "$FORCE_REINSTALL" ]] && is_llmbo_nixos; then
+        info "Force reinstall requested"
+      fi
+      get_ssh_keys
+      detect_git_identity
+      prompt_api_keys
+      prompt_git_identity
+      deploy_nixos_anywhere
+      deploy_nixos_user_files
+
+      echo ""
+      success "NixOS deployment complete!"
+      echo ""
+      echo "You can now SSH in as root or agent:"
+      echo "  ssh -A root@${TARGET_HOST#*@}"
+      echo "  ssh -A agent@${TARGET_HOST#*@}"
+      echo ""
+      echo "The agent user is recommended for day-to-day use."
+    fi
+  else
+    # Home-manager mode: preserve OS, add Nix
+    echo "This will install Nix and LLM agent tools on the target machine."
+    echo "The host OS is preserved — only Nix and home-manager are added."
+    echo ""
+    detect_remote_secrets
+    detect_git_identity
+    prompt_api_keys
+    prompt_git_identity
+    install_nix
+    setup_swap
+    setup_podman
+    setup_config
+    apply_home_manager
+
+    echo ""
+    success "Deployment complete!"
+    echo ""
+    echo "To clone your repos, connect with: ssh -A $TARGET_HOST"
+    echo "Then run sandbox-key to set up a permanent SSH key for this machine."
+  fi
 }
 
 main "$@"
