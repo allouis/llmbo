@@ -1,59 +1,26 @@
 # Home Manager configuration for LLM agent machines
-{ config, pkgs, lib, llmPkgs, ... }:
+{ config, pkgs, lib, llmPkgs, useDocker ? false, ... }:
 
 {
   home.stateVersion = "24.11";
 
-  home.packages = with pkgs; [
-    # LLM agents
-    llmPkgs.claude-code
-    llmPkgs.opencode
-
-    # Version control
-    git
-    jujutsu
-    gh
-
-    # Editor
-    vim
-
-    # Tools
-    ripgrep
-    fd
-    tree
-    jq
-    curl
-    wget
-    htop
-
-    # Node.js
-    nodejs_22  # LTS
-    (yarn.override { nodejs = nodejs_22; })
-
-    # Build tools (for native modules like re2)
-    gnumake
-    gcc
-    pkg-config
-    # Python with setuptools for node-gyp (distutils was removed in Python 3.12+)
-    (python3.withPackages (ps: [ ps.setuptools ]))
-
-    # Containers (podman as rootless docker replacement)
-    podman
-    podman-compose
-    # CLI wrappers (aliases don't work in scripts/subshells)
-    (writeShellScriptBin "docker" ''exec podman "$@"'')
-    (writeShellScriptBin "docker-compose" ''exec podman-compose "$@"'')
-  ];
-
-  # Rootless podman config
-  xdg.configFile."containers/policy.json".text = builtins.toJSON {
-    default = [{ type = "insecureAcceptAnything"; }];
+  home.packages = import ../shared/packages.nix {
+    inherit pkgs llmPkgs useDocker;
   };
 
-  xdg.configFile."containers/registries.conf".text = ''
-    [registries.search]
-    registries = ['docker.io']
-  '';
+  # Rootless podman config (only when not using real docker)
+  xdg.configFile."containers/policy.json" = lib.mkIf (!useDocker) {
+    text = builtins.toJSON {
+      default = [{ type = "insecureAcceptAnything"; }];
+    };
+  };
+
+  xdg.configFile."containers/registries.conf" = lib.mkIf (!useDocker) {
+    text = ''
+      [registries.search]
+      registries = ['docker.io']
+    '';
+  };
 
   home.sessionPath = [ "$HOME/bin" ];
 
@@ -99,15 +66,16 @@
         echo -e "  \e[1mupdate-agents\e[0m          Update agents to latest"
         echo -e "  \e[1mupdate-system\e[0m          Update all packages"
         echo -e "  \e[1msandbox-key\e[0m            Generate SSH key for this machine"
-        echo -e "  \e[1misolate-orbstack\e[0m       Unmount host filesystem (OrbStack)"
+        if [ -d /opt/orbstack-guest ]; then
+          echo -e "  \e[1misolate-orbstack\e[0m       Unmount host filesystem (OrbStack)"
+        fi
         echo ""
         echo -e "  \e[1mtmux new -s work\e[0m       Start persistent session"
         echo -e "  \e[1mtmux attach\e[0m            Reconnect to session"
         echo ""
-        echo -e "  \e[2mdocker → podman (rootless)\e[0m"
-        echo ""
-
-        # Check for OrbStack
+        ${if useDocker then "" else ''echo -e "  \e[2mdocker → podman (rootless)\e[0m"
+        echo ""''}
+        # OrbStack-specific warnings
         if [ -d /opt/orbstack-guest ]; then
           if [ -d /Users ]; then
             echo -e "  \e[31;1mWarning: OrbStack host filesystem is mounted.\e[0m"
