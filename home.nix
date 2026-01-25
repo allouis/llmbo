@@ -28,11 +28,21 @@
 
     # Node.js
     nodejs_22  # LTS
-    yarn
+    (yarn.override { nodejs = nodejs_22; })
+
+    # Build tools (for native modules like re2)
+    gnumake
+    gcc
+    pkg-config
+    # Python with setuptools for node-gyp (distutils was removed in Python 3.12+)
+    (python3.withPackages (ps: [ ps.setuptools ]))
 
     # Containers (podman as rootless docker replacement)
     podman
     podman-compose
+    # CLI wrappers (aliases don't work in scripts/subshells)
+    (writeShellScriptBin "docker" ''exec podman "$@"'')
+    (writeShellScriptBin "docker-compose" ''exec podman-compose "$@"'')
   ];
 
   # Rootless podman config
@@ -57,10 +67,6 @@
   # This creates a stable symlink that tmux sessions can use.
   programs.bash = {
     enable = true;
-    shellAliases = {
-      docker = "podman";
-      docker-compose = "podman-compose";
-    };
     initExtra = ''
       # Load secrets if present
       if [ -f "$HOME/.secrets.env" ]; then
@@ -98,7 +104,7 @@
         echo -e "  \e[1mtmux new -s work\e[0m       Start persistent session"
         echo -e "  \e[1mtmux attach\e[0m            Reconnect to session"
         echo ""
-        echo -e "  \e[2mdocker is aliased to podman (rootless)\e[0m"
+        echo -e "  \e[2mdocker → podman (rootless)\e[0m"
         echo ""
 
         # Check for OrbStack
