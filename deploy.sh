@@ -19,6 +19,7 @@ LINEAR_API_KEY=""
 CONTEXT7_API_KEY=""
 GIT_USER_NAME=""
 GIT_USER_EMAIL=""
+FORCE_CONFIGS=""
 
 # --- Argument parsing ---
 usage() {
@@ -32,6 +33,7 @@ Options:
   -t, --gh-token TOKEN   GitHub personal access token
       --linear-key KEY   Linear API key (for issue tracking MCP)
       --context7-key KEY Context7 API key (for docs lookup MCP)
+      --force-configs    Reset config files (.claude.json, opencode.json)
   -h, --help             Show this help message
 
 Examples:
@@ -65,6 +67,10 @@ parse_args() {
         [[ -z "${2:-}" || "$2" == -* ]] && error "--context7-key requires a value"
         CONTEXT7_API_KEY="$2"
         shift 2
+        ;;
+      --force-configs)
+        FORCE_CONFIGS=1
+        shift
         ;;
       -h|--help)
         usage
@@ -539,15 +545,27 @@ LOCALEOF
   # Ensure secrets file has correct permissions
   ssh "$TARGET_HOST" "[ -f '$remote_home/.secrets.env' ] && chmod 600 '$remote_home/.secrets.env'" || true
 
-  # Home directory files (excluding README)
+  # Home directory files (categorized by deploy mode)
   if [[ -d "$script_dir/home" ]]; then
-    if ssh "$TARGET_HOST" "command -v rsync" >/dev/null 2>&1; then
-      rsync -aq --no-owner --no-group --exclude='README.md' "$script_dir/home/" "$TARGET_HOST:$remote_home/"
-    else
-      # Fallback: scp everything then remove README
-      scp -rq "$script_dir/home/." "$TARGET_HOST:$remote_home/"
-      ssh "$TARGET_HOST" "rm -f '$remote_home/README.md'"
+    # Always update: bin/ scripts (repo-controlled utilities)
+    if [[ -d "$script_dir/home/bin" ]]; then
+      ssh "$TARGET_HOST" "mkdir -p '$remote_home/bin'"
+      if ssh "$TARGET_HOST" "command -v rsync" >/dev/null 2>&1; then
+        rsync -aq --no-owner --no-group "$script_dir/home/bin/" "$TARGET_HOST:$remote_home/bin/"
+      else
+        scp -rq "$script_dir/home/bin/." "$TARGET_HOST:$remote_home/bin/"
+      fi
     fi
+
+    # Deploy once: config templates (skip if already exists, unless --force-configs)
+    for file in .claude.json opencode.json; do
+      if [[ -f "$script_dir/home/$file" ]]; then
+        if [[ -n "$FORCE_CONFIGS" ]] || ! ssh "$TARGET_HOST" "[ -f '$remote_home/$file' ]"; then
+          scp -q "$script_dir/home/$file" "$TARGET_HOST:$remote_home/$file"
+          info "Created ~/$file"
+        fi
+      fi
+    done
   fi
 
   success "Configuration copied"
