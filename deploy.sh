@@ -208,7 +208,12 @@ detect_system() {
 detect_remote_secrets() {
   # Fetch existing secrets from remote to avoid re-prompting
   local remote_home
-  remote_home=$(ssh "$TARGET_HOST" "echo \$HOME")
+  if [[ "$DEPLOY_MODE" == "nixos" ]]; then
+    # For NixOS, secrets are in agent's home (even if connected as root)
+    remote_home="/home/agent"
+  else
+    remote_home=$(ssh "$TARGET_HOST" "echo \$HOME")
+  fi
   local remote_secrets
   remote_secrets=$(ssh "$TARGET_HOST" "cat '$remote_home/.secrets.env' 2>/dev/null" || true)
 
@@ -711,6 +716,14 @@ apply_home_manager() {
   local remote_home
   remote_home=$(ssh "$TARGET_HOST" "echo \$HOME")
 
+  # Use nixos-agent-* target for NixOS (useDocker=true)
+  local flake_target
+  if [[ "$DEPLOY_MODE" == "nixos" ]]; then
+    flake_target="nixos-agent-$ARCH"
+  else
+    flake_target="agent-$ARCH"
+  fi
+
   # Source nix profile and run home-manager
   ssh -A "$TARGET_HOST" "
     # Source nix (for non-NixOS systems)
@@ -720,7 +733,7 @@ apply_home_manager() {
 
     cd '$remote_home/.config/home-manager'
     export NIX_CONFIG='experimental-features = nix-command flakes'
-    nix --max-jobs 1 run home-manager -- switch --impure --flake .#agent-$ARCH -b backup
+    nix --max-jobs 1 run home-manager -- switch --impure --flake .#$flake_target -b backup
   "
 
   success "Configuration applied"
@@ -779,6 +792,10 @@ deploy_nixos_anywhere() {
   success "NixOS installation complete!"
   echo ""
 
+  # Remove old host key (OS reinstall generates new keys)
+  local target_ip="${TARGET_HOST#*@}"
+  ssh-keygen -R "$target_ip" 2>/dev/null || true
+
   # Wait for the machine to come back up
   info "Waiting for machine to reboot..."
   sleep 10
@@ -797,59 +814,9 @@ deploy_nixos_anywhere() {
 
   # Write marker file to indicate llmbo installed this NixOS
   ssh "$TARGET_HOST" "echo 'llmbo' > /etc/llmbo"
-}
 
-deploy_nixos_user_files() {
-  info "Deploying user files on NixOS..."
-
-  local script_dir
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-  # Deploy to both root and agent user
-  for user_home in /root /home/agent; do
-    ssh "$TARGET_HOST" "mkdir -p '$user_home/bin'"
-
-    # Copy bin scripts
-    if [[ -d "$script_dir/home/bin" ]]; then
-      if ssh "$TARGET_HOST" "command -v rsync" >/dev/null 2>&1; then
-        rsync -aq --no-owner --no-group "$script_dir/home/bin/" "$TARGET_HOST:$user_home/bin/"
-      else
-        scp -rq "$script_dir/home/bin/." "$TARGET_HOST:$user_home/bin/"
-      fi
-    fi
-
-    # Copy config templates (same as home-manager mode now)
-    for file in .claude.json opencode.json; do
-      if [[ -f "$script_dir/home/$file" ]]; then
-        if [[ -n "$FORCE_CONFIGS" ]] || ! ssh "$TARGET_HOST" "[ -f '$user_home/$file' ]"; then
-          scp -q "$script_dir/home/$file" "$TARGET_HOST:$user_home/$file"
-        fi
-      fi
-    done
-
-    # Create/update secrets file
-    if [[ -n "$GH_TOKEN" || -n "$LINEAR_API_KEY" || -n "$CONTEXT7_API_KEY" || -n "$GIT_USER_NAME" || -n "$GIT_USER_EMAIL" ]]; then
-      local secrets_content=""
-      [[ -n "$GH_TOKEN" ]] && secrets_content+="GH_TOKEN=$GH_TOKEN"$'\n'
-      [[ -n "$LINEAR_API_KEY" ]] && secrets_content+="LINEAR_API_KEY=$LINEAR_API_KEY"$'\n'
-      [[ -n "$CONTEXT7_API_KEY" ]] && secrets_content+="CONTEXT7_API_KEY=$CONTEXT7_API_KEY"$'\n'
-      [[ -n "$GIT_USER_NAME" ]] && secrets_content+="GIT_AUTHOR_NAME=\"$GIT_USER_NAME\""$'\n'
-      [[ -n "$GIT_USER_NAME" ]] && secrets_content+="GIT_COMMITTER_NAME=\"$GIT_USER_NAME\""$'\n'
-      [[ -n "$GIT_USER_EMAIL" ]] && secrets_content+="GIT_AUTHOR_EMAIL=\"$GIT_USER_EMAIL\""$'\n'
-      [[ -n "$GIT_USER_EMAIL" ]] && secrets_content+="GIT_COMMITTER_EMAIL=\"$GIT_USER_EMAIL\""$'\n'
-
-      ssh "$TARGET_HOST" "cat > '$user_home/.secrets.env' << 'EOF'
-$secrets_content
-EOF
-chmod 600 '$user_home/.secrets.env'"
-    fi
-  done
-
-  # Fix ownership for agent user
-  ssh "$TARGET_HOST" "chown -R agent:users /home/agent"
-
-  success "User files deployed to both root and agent"
-  echo ""
+  # Fix ownership of agent's SSH directory (extra-files copies as root)
+  ssh "$TARGET_HOST" "chown -R agent:users /home/agent/.ssh"
 }
 
 rebuild_nixos() {
@@ -892,67 +859,74 @@ main() {
   prompt_target_host
   detect_system
 
-  if [[ "$DEPLOY_MODE" == "nixos" ]]; then
-    if is_llmbo_nixos && [[ -z "$FORCE_REINSTALL" ]]; then
-      # Re-run: llmbo NixOS already installed, just update configs
-      info "llmbo NixOS detected — updating configs only"
-      echo ""
-      detect_remote_secrets
-      detect_git_identity
-      prompt_api_keys
-      prompt_git_identity
-      rebuild_nixos
-      deploy_nixos_user_files
+  # Track if this is a fresh NixOS install (no remote secrets to detect)
+  local fresh_nixos_install=""
 
-      echo ""
-      success "NixOS update complete!"
-      echo ""
-      echo "You can SSH in as root or agent:"
-      echo "  ssh -A root@${TARGET_HOST#*@}"
-      echo "  ssh -A agent@${TARGET_HOST#*@}"
-    elif is_any_nixos && [[ -z "$FORCE_REINSTALL" ]]; then
-      # Someone else's NixOS - don't touch
+  if [[ "$DEPLOY_MODE" == "nixos" ]]; then
+    if is_any_nixos && ! is_llmbo_nixos && [[ -z "$FORCE_REINSTALL" ]]; then
       error "NixOS detected but not installed by llmbo. Use --force to reinstall."
-    else
-      # Fresh install (or --force reinstall)
+    fi
+    if ! is_llmbo_nixos || [[ -n "$FORCE_REINSTALL" ]]; then
+      fresh_nixos_install=1
       echo -e "${RED}NixOS mode: This will WIPE and REPLACE the target machine's OS!${NC}"
       echo "A complete NixOS installation will be performed via nixos-anywhere."
       echo ""
       if [[ -n "$FORCE_REINSTALL" ]] && is_llmbo_nixos; then
         info "Force reinstall requested"
       fi
-      get_ssh_keys
-      detect_git_identity
-      prompt_api_keys
-      prompt_git_identity
-      deploy_nixos_anywhere
-      deploy_nixos_user_files
-
+    else
+      info "llmbo NixOS detected — updating configuration"
       echo ""
-      success "NixOS deployment complete!"
-      echo ""
-      echo "You can now SSH in as root or agent:"
-      echo "  ssh -A root@${TARGET_HOST#*@}"
-      echo "  ssh -A agent@${TARGET_HOST#*@}"
-      echo ""
-      echo "The agent user is recommended for day-to-day use."
     fi
   else
-    # Home-manager mode: preserve OS, add Nix
     echo "This will install Nix and LLM agent tools on the target machine."
     echo "The host OS is preserved — only Nix and home-manager are added."
     echo ""
+  fi
+
+  # Common: detect secrets and identity
+  if [[ -z "$fresh_nixos_install" ]]; then
     detect_remote_secrets
-    detect_git_identity
-    prompt_api_keys
-    prompt_git_identity
+  fi
+  detect_git_identity
+  prompt_api_keys
+  prompt_git_identity
+
+  # Mode fork: get Nix on the machine
+  if [[ "$DEPLOY_MODE" == "nixos" ]]; then
+    if [[ -n "$fresh_nixos_install" ]]; then
+      get_ssh_keys
+      deploy_nixos_anywhere
+    else
+      rebuild_nixos
+    fi
+    # Switch to agent user for home-manager setup
+    TARGET_HOST="agent@${TARGET_HOST#*@}"
+  else
     install_nix
     setup_swap
     setup_podman
-    setup_config
-    apply_home_manager
+  fi
 
+  # Common: configure user environment
+  setup_config
+  apply_home_manager
+
+  # Success message
+  echo ""
+  if [[ "$DEPLOY_MODE" == "nixos" ]]; then
+    if [[ -n "$fresh_nixos_install" ]]; then
+      success "NixOS deployment complete!"
+    else
+      success "NixOS update complete!"
+    fi
     echo ""
+    echo "You can SSH in as root or agent:"
+    echo "  ssh -A root@${TARGET_HOST#*@}"
+    echo "  ssh -A $TARGET_HOST"
+    echo ""
+    echo "The agent user is recommended for day-to-day use."
+  else
     success "Deployment complete!"
     echo ""
     echo "To clone your repos, connect with: ssh -A $TARGET_HOST"

@@ -20,7 +20,7 @@
   outputs = { self, nixpkgs, home-manager, disko, llm-agents, ... }:
     let
       # Home-manager configuration (preserves existing OS)
-      mkHome = { system }:
+      mkHome = { system, useDocker ? false }:
         let
           pkgs = nixpkgs.legacyPackages.${system};
           llmPkgs = llm-agents.packages.${system};
@@ -30,7 +30,7 @@
         in
         home-manager.lib.homeManagerConfiguration {
           inherit pkgs;
-          extraSpecialArgs = { inherit llmPkgs; useDocker = false; };
+          extraSpecialArgs = { inherit llmPkgs useDocker; };
           modules = [
             ./home-manager/home.nix
             {
@@ -50,20 +50,10 @@
           specialArgs = { inherit llmPkgs; };
           modules = [
             disko.nixosModules.disko
-            home-manager.nixosModules.home-manager
             ./nixos/disk-config.nix
             ./nixos/configuration.nix
             {
               disko.devices.disk.disk1.device = disk;
-
-              # Home-manager integration for user configs
-              home-manager.useGlobalPkgs = true;
-              home-manager.useUserPackages = true;
-              home-manager.extraSpecialArgs = { inherit llmPkgs; useDocker = true; };
-
-              # Apply same home.nix to both users with useDocker=true
-              home-manager.users.root = import ./home-manager/home.nix;
-              home-manager.users.agent = import ./home-manager/home.nix;
             }
           ];
         };
@@ -71,8 +61,12 @@
     {
       # Home-manager configurations (default, non-destructive)
       homeConfigurations = {
+        # Non-NixOS (uses podman)
         "agent-x86_64-linux" = mkHome { system = "x86_64-linux"; };
         "agent-aarch64-linux" = mkHome { system = "aarch64-linux"; };
+        # NixOS (uses docker)
+        "nixos-agent-x86_64-linux" = mkHome { system = "x86_64-linux"; useDocker = true; };
+        "nixos-agent-aarch64-linux" = mkHome { system = "aarch64-linux"; useDocker = true; };
       };
 
       # NixOS configurations (opt-in, replaces OS via nixos-anywhere)
