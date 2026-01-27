@@ -23,6 +23,7 @@ GIT_USER_NAME=""
 GIT_USER_EMAIL=""
 FORCE_CONFIGS=""
 FORCE_REINSTALL=""
+TARGET_HOSTNAME=""
 
 # --- Argument parsing ---
 usage() {
@@ -171,36 +172,15 @@ detect_system() {
       ;;
   esac
 
+  # Grab existing hostname so we can preserve it during NixOS deploy
+  TARGET_HOSTNAME=$(ssh -o ConnectTimeout=10 "$TARGET_HOST" "hostname" 2>/dev/null || echo "agent-machine")
+
   # For NixOS mode, also detect the primary disk
   if [[ "$DEPLOY_MODE" == "nixos" ]]; then
-    # Detect primary disk (first disk by name)
-    local disk_name
-    disk_name=$(ssh "$TARGET_HOST" "lsblk -d -n -o NAME,TYPE | awk '\$2==\"disk\"{print \$1; exit}'")
-
-    # Map disk name to type for flake target
-    local disk_type
-    case "$disk_name" in
-      sd*) disk_type="sda" ;;
-      vd*) disk_type="vda" ;;
-      nvme*) disk_type="nvme" ;;
-      *)
-        echo ""
-        error "Unknown disk type: $disk_name"
-        ;;
-    esac
-
-    # Construct flake target: agent-{arch}-{disk_type}
-    local arch_short
-    if [[ "$ARCH" == "aarch64-linux" ]]; then
-      arch_short="aarch64"
-    else
-      arch_short="x86_64"
-    fi
-    FLAKE_TARGET="agent-${arch_short}-${disk_type}"
-
-    success "$ARCH, disk: /dev/$disk_name (NixOS: $FLAKE_TARGET)"
+    detect_disk
+    success "$ARCH, disk: /dev/$DETECTED_DISK, hostname: $TARGET_HOSTNAME (NixOS: $FLAKE_TARGET)"
   else
-    success "$ARCH"
+    success "$ARCH, hostname: $TARGET_HOSTNAME"
   fi
   echo ""
 }
@@ -780,14 +760,23 @@ deploy_nixos_anywhere() {
   chmod 700 "$extra_files/root/.ssh" "$extra_files/home/agent/.ssh"
   chmod 600 "$extra_files/root/.ssh/authorized_keys" "$extra_files/home/agent/.ssh/authorized_keys"
 
+  # Copy flake source to a temp directory and substitute the hostname.
+  # nixos-anywhere builds locally so we can't read files from the target
+  # at build time. The repo stays untouched.
+  local temp_flake
+  temp_flake=$(mktemp -d)
+  cp -r "$script_dir"/flake.nix "$script_dir"/flake.lock "$script_dir"/nixos "$script_dir"/home-manager "$script_dir"/shared "$temp_flake/"
+  sed -i '' "s/networking.hostName = \"agent-machine\"/networking.hostName = \"$TARGET_HOSTNAME\"/" "$temp_flake/nixos/configuration.nix"
+  git -C "$temp_flake" init -q && git -C "$temp_flake" add -A && git -C "$temp_flake" commit -q -m "temp"
+
   # Run nixos-anywhere
   nix run github:nix-community/nixos-anywhere -- \
-    --flake "$script_dir#$FLAKE_TARGET" \
+    --flake "$temp_flake#$FLAKE_TARGET" \
     --extra-files "$extra_files" \
     "$TARGET_HOST"
 
   # Cleanup
-  rm -rf "$temp_keys" "$extra_files"
+  rm -rf "$temp_keys" "$extra_files" "$temp_flake"
 
   success "NixOS installation complete!"
   echo ""
@@ -832,6 +821,9 @@ rebuild_nixos() {
   scp -q "$script_dir/nixos/disk-config.nix" "$TARGET_HOST:/etc/nixos/nixos/"
   scp -q "$script_dir/home-manager/home.nix" "$TARGET_HOST:/etc/nixos/home-manager/"
   scp -q "$script_dir/shared/packages.nix" "$TARGET_HOST:/etc/nixos/shared/"
+
+  # Substitute the target's hostname into the copied configuration
+  ssh "$TARGET_HOST" "sed -i 's/networking.hostName = \"agent-machine\"/networking.hostName = \"$TARGET_HOSTNAME\"/' /etc/nixos/nixos/configuration.nix"
 
   # Smart sync for flake.lock
   local local_ts remote_ts
