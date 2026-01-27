@@ -24,6 +24,7 @@ GIT_USER_EMAIL=""
 FORCE_CONFIGS=""
 FORCE_REINSTALL=""
 TARGET_HOSTNAME=""
+DETECTED_DISK=""
 
 # --- Argument parsing ---
 usage() {
@@ -153,6 +154,33 @@ prompt_target_host() {
   fi
 
   echo ""
+}
+
+detect_disk() {
+  # Detect primary disk (first disk by name)
+  local disk_name
+  disk_name=$(ssh "$TARGET_HOST" "lsblk -d -n -o NAME,TYPE | awk '\$2==\"disk\"{print \$1; exit}'")
+
+  # Map disk name to type for flake target
+  local disk_type
+  case "$disk_name" in
+    sd*) disk_type="sda" ;;
+    vd*) disk_type="vda" ;;
+    nvme*) disk_type="nvme" ;;
+    *)
+      error "Unknown disk type: $disk_name"
+      ;;
+  esac
+
+  # Construct flake target: agent-{arch}-{disk_type}
+  local arch_short
+  if [[ "$ARCH" == "aarch64-linux" ]]; then
+    arch_short="aarch64"
+  else
+    arch_short="x86_64"
+  fi
+  FLAKE_TARGET="agent-${arch_short}-${disk_type}"
+  DETECTED_DISK="$disk_name"
 }
 
 detect_system() {
@@ -814,31 +842,39 @@ rebuild_nixos() {
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+  # Always use root for NixOS rebuild (writes to /etc/nixos, runs nixos-rebuild)
+  local root_target
+  if [[ "$TARGET_HOST" == *@* ]]; then
+    root_target="root@${TARGET_HOST#*@}"
+  else
+    root_target="root@$TARGET_HOST"
+  fi
+
   # Copy flake files to /etc/nixos
-  ssh "$TARGET_HOST" "mkdir -p /etc/nixos/nixos /etc/nixos/home-manager /etc/nixos/shared"
-  scp -q "$script_dir/flake.nix" "$TARGET_HOST:/etc/nixos/"
-  scp -q "$script_dir/nixos/configuration.nix" "$TARGET_HOST:/etc/nixos/nixos/"
-  scp -q "$script_dir/nixos/disk-config.nix" "$TARGET_HOST:/etc/nixos/nixos/"
-  scp -q "$script_dir/home-manager/home.nix" "$TARGET_HOST:/etc/nixos/home-manager/"
-  scp -q "$script_dir/shared/packages.nix" "$TARGET_HOST:/etc/nixos/shared/"
+  ssh "$root_target" "mkdir -p /etc/nixos/nixos /etc/nixos/home-manager /etc/nixos/shared"
+  scp -q "$script_dir/flake.nix" "$root_target:/etc/nixos/"
+  scp -q "$script_dir/nixos/configuration.nix" "$root_target:/etc/nixos/nixos/"
+  scp -q "$script_dir/nixos/disk-config.nix" "$root_target:/etc/nixos/nixos/"
+  scp -q "$script_dir/home-manager/home.nix" "$root_target:/etc/nixos/home-manager/"
+  scp -q "$script_dir/shared/packages.nix" "$root_target:/etc/nixos/shared/"
 
   # Substitute the target's hostname into the copied configuration
-  ssh "$TARGET_HOST" "sed -i 's/networking.hostName = \"agent-machine\"/networking.hostName = \"$TARGET_HOSTNAME\"/' /etc/nixos/nixos/configuration.nix"
+  ssh "$root_target" "sed -i 's/networking.hostName = \"agent-machine\"/networking.hostName = \"$TARGET_HOSTNAME\"/' /etc/nixos/nixos/configuration.nix"
 
   # Smart sync for flake.lock
   local local_ts remote_ts
   local_ts=$(get_flake_max_timestamp "$script_dir/flake.lock")
-  remote_ts=$(ssh "$TARGET_HOST" "cat /etc/nixos/flake.lock 2>/dev/null" | get_flake_max_timestamp /dev/stdin || echo 0)
+  remote_ts=$(ssh "$root_target" "cat /etc/nixos/flake.lock 2>/dev/null" | get_flake_max_timestamp /dev/stdin || echo 0)
 
   if [[ "$local_ts" -gt "$remote_ts" ]]; then
-    scp -q "$script_dir/flake.lock" "$TARGET_HOST:/etc/nixos/"
+    scp -q "$script_dir/flake.lock" "$root_target:/etc/nixos/"
     info "Pushed local flake.lock (newer than remote)"
   elif [[ "$remote_ts" -gt "$local_ts" ]]; then
     info "Keeping remote flake.lock (newer than local)"
   fi
 
   # Rebuild NixOS
-  ssh "$TARGET_HOST" "nixos-rebuild switch --flake /etc/nixos#$FLAKE_TARGET"
+  ssh "$root_target" "nixos-rebuild switch --flake /etc/nixos#$FLAKE_TARGET"
 
   success "NixOS rebuilt"
   echo ""
@@ -850,6 +886,14 @@ main() {
   print_header
   prompt_target_host
   detect_system
+
+  # Auto-detect existing llmbo NixOS — no need for --nixos on redeploys
+  if [[ "$DEPLOY_MODE" == "home-manager" ]] && is_llmbo_nixos; then
+    DEPLOY_MODE="nixos"
+    detect_disk
+    info "llmbo NixOS detected — auto-switching to update mode"
+    echo ""
+  fi
 
   # Track if this is a fresh NixOS install (no remote secrets to detect)
   local fresh_nixos_install=""
