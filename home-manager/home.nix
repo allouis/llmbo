@@ -8,6 +8,10 @@
     inherit pkgs llmPkgs useDocker;
   };
 
+  home.file.".local/bin/claude" = {
+    source = "${llmPkgs.claude-code}/bin/claude";
+  };
+
   # Rootless podman config (only when not using real docker)
   xdg.configFile."containers/policy.json" = lib.mkIf (!useDocker) {
     text = builtins.toJSON {
@@ -63,6 +67,7 @@
         echo ""
         echo -e "  \e[1mclaude\e[0m                 Claude Code CLI"
         echo -e "  \e[1mopencode\e[0m               OpenCode CLI"
+        echo -e "  \e[1mhappy\e[0m                  Claude Code from phone/web (Happy Coder)"
         echo -e "  \e[1mupdate-agents\e[0m          Update agents to latest"
         echo -e "  \e[1mupdate-system\e[0m          Update all packages"
         echo -e "  \e[1msandbox-key\e[0m            Generate SSH key for this machine"

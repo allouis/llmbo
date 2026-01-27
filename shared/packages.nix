@@ -5,6 +5,7 @@ with pkgs; [
   # LLM agents
   llmPkgs.claude-code
   llmPkgs.opencode
+  llmPkgs.happy-coder
 
   # Version control
   git
