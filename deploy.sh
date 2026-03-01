@@ -651,6 +651,18 @@ LOCALEOF
   # Ensure secrets file has correct permissions
   ssh "$TARGET_HOST" "[ -f '$remote_home/.secrets.env' ] && chmod 600 '$remote_home/.secrets.env'" || true
 
+  # Configure jujutsu identity (jj doesn't read GIT_AUTHOR_* env vars)
+  if [[ -n "$GIT_USER_NAME" && -n "$GIT_USER_EMAIL" ]]; then
+    ssh "$TARGET_HOST" "
+      mkdir -p '$remote_home/.config/jj'
+      cat > '$remote_home/.config/jj/config.toml' << EOF
+[user]
+name = \"$GIT_USER_NAME\"
+email = \"$GIT_USER_EMAIL\"
+EOF
+    "
+  fi
+
   # Home directory files (categorized by deploy mode)
   if [[ -d "$script_dir/home" ]]; then
     # Always update: bin/ scripts (repo-controlled utilities)
@@ -828,9 +840,6 @@ deploy_nixos_anywhere() {
   echo ""
   success "Machine is back online!"
   echo ""
-
-  # Write marker file to indicate llmbo installed this NixOS
-  ssh "$TARGET_HOST" "echo 'llmbo' > /etc/llmbo"
 
   # Fix ownership of agent's SSH directory (extra-files copies as root)
   ssh "$TARGET_HOST" "chown -R agent:users /home/agent/.ssh"
