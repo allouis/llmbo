@@ -45,13 +45,22 @@
     size = 4096;  # 4GB
   }];
 
+  users.users.root.openssh.authorizedKeys.keys = [
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFJmICnIur0KyC/BZybYsiPc1oZq5ZC+UTPqNcxdyHFX"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK5YFCqFE5U1+tC4zio+E54PrjM3jL5FaxCMHFSxQd/l pixel-9a"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOSfUoKIt7TsBSBRnUQL9HrwhHfoFznSuQtEtJ4GE/Is"
+  ];
+
   # Agent user - can SSH in and run LLM agents without root
   users.users.agent = {
     isNormalUser = true;
     extraGroups = [ "docker" "wheel" ];
     home = "/home/agent";
-    # SSH keys are set by deploy script via users.users.agent.openssh.authorizedKeys.keys
-    # or inherited from root during nixos-anywhere deployment
+    openssh.authorizedKeys.keys = [
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFJmICnIur0KyC/BZybYsiPc1oZq5ZC+UTPqNcxdyHFX"
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK5YFCqFE5U1+tC4zio+E54PrjM3jL5FaxCMHFSxQd/l pixel-9a"
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOSfUoKIt7TsBSBRnUQL9HrwhHfoFznSuQtEtJ4GE/Is"
+    ];
   };
 
   # Passwordless sudo for agent (sandbox environment)
