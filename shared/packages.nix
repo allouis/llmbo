@@ -36,7 +36,9 @@ with pkgs; [
   # Python with setuptools for node-gyp (distutils was removed in Python 3.12+)
   (python3.withPackages (ps: [ ps.setuptools ]))
 ] ++ (if useDocker then [
-  docker-compose
+  # Wrapper so `docker-compose` delegates to `docker compose` (the CLI plugin),
+  # which properly discovers buildx and other plugins
+  (writeShellScriptBin "docker-compose" ''exec docker compose "$@"'')
 ] else [
   # Containers (podman as rootless docker replacement)
   podman

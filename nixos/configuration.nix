@@ -19,6 +19,7 @@
   networking.hostName = "agent-machine";
   networking.useDHCP = lib.mkDefault true;
   networking.firewall.enable = true;
+  networking.firewall.allowedUDPPortRanges = [{ from = 60000; to = 61000; }];
 
   services.openssh = {
     enable = true;
@@ -38,6 +39,15 @@
 
   # Real Docker (not podman)
   virtualisation.docker.enable = true;
+  virtualisation.docker.daemon.settings = {
+    features = { buildkit = true; };
+  };
+
+  # Docker CLI plugins — symlinked so `docker compose` and `docker buildx` work
+  systemd.tmpfiles.rules = [
+    "L+ /usr/local/lib/docker/cli-plugins/docker-buildx - - - - ${pkgs.docker-buildx}/libexec/docker/cli-plugins/docker-buildx"
+    "L+ /usr/local/lib/docker/cli-plugins/docker-compose - - - - ${pkgs.docker-compose}/libexec/docker/cli-plugins/docker-compose"
+  ];
 
   # Swap for memory-constrained VMs
   swapDevices = [{
@@ -71,6 +81,8 @@
 
   # Marker file to indicate this NixOS was installed by llmbo
   # Used by deploy.sh to detect re-runs and skip reinstallation
+  environment.systemPackages = [ pkgs.mosh ];
+
   environment.etc."llmbo".text = "llmbo";
 
   time.timeZone = "UTC";
