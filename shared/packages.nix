@@ -1,11 +1,14 @@
 # Shared package list for both home-manager and NixOS modes
-{ pkgs, llmPkgs, useDocker ? false }:
+{ pkgs, llmPkgs, jjSyncPkg ? null, useDocker ? false }:
 
 with pkgs; [
   # LLM agents
   llmPkgs.claude-code
   llmPkgs.opencode
   llmPkgs.happy-coder
+  llmPkgs.beads
+  llmPkgs.openspec
+  llmPkgs.agent-browser
 
   # Version control
   git
@@ -24,6 +27,8 @@ with pkgs; [
   wget
   htop
   tmux
+  gettext  # provides envsubst
+  ntfy-sh
 
   # Node.js
   nodejs_22  # LTS
@@ -35,7 +40,8 @@ with pkgs; [
   pkg-config
   # Python with setuptools for node-gyp (distutils was removed in Python 3.12+)
   (python3.withPackages (ps: [ ps.setuptools ]))
-] ++ (if useDocker then [
+] ++ pkgs.lib.optional (jjSyncPkg != null) jjSyncPkg
+++ (if useDocker then [
   # Wrapper so `docker-compose` delegates to `docker compose` (the CLI plugin),
   # which properly discovers buildx and other plugins
   (writeShellScriptBin "docker-compose" ''exec docker compose "$@"'')

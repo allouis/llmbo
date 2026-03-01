@@ -15,22 +15,27 @@
       url = "github:numtide/llm-agents.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    jj-sync = {
+      url = "git+ssh://git@github.com/allouis/jj-sync";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, home-manager, disko, llm-agents, ... }:
+  outputs = { self, nixpkgs, home-manager, disko, llm-agents, jj-sync, ... }:
     let
       # Home-manager configuration (preserves existing OS)
       mkHome = { system, useDocker ? false }:
         let
           pkgs = nixpkgs.legacyPackages.${system};
           llmPkgs = llm-agents.packages.${system};
+          jjSyncPkg = jj-sync.packages.${system}.default;
           # Use environment variables (requires --impure flag)
           username = builtins.getEnv "USER";
           homeDir = builtins.getEnv "HOME";
         in
         home-manager.lib.homeManagerConfiguration {
           inherit pkgs;
-          extraSpecialArgs = { inherit llmPkgs useDocker; };
+          extraSpecialArgs = { inherit llmPkgs jjSyncPkg useDocker; };
           modules = [
             ./home-manager/home.nix
             {

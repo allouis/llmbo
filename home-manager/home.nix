@@ -1,11 +1,11 @@
 # Home Manager configuration for LLM agent machines
-{ config, pkgs, lib, llmPkgs, useDocker ? false, ... }:
+{ config, pkgs, lib, llmPkgs, jjSyncPkg ? null, useDocker ? false, ... }:
 
 {
   home.stateVersion = "24.11";
 
   home.packages = import ../shared/packages.nix {
-    inherit pkgs llmPkgs useDocker;
+    inherit pkgs llmPkgs jjSyncPkg useDocker;
   };
 
   home.file.".local/bin/claude" = {
