@@ -752,6 +752,14 @@ apply_home_manager() {
     fi
 
     cd '$remote_home/.config/home-manager'
+
+    # Ensure home-manager dir is its own git repo so Nix resolves the flake
+    # here rather than walking up to a parent repo (e.g. if ~ is a git repo)
+    if [ ! -d .git ]; then
+      git init -q
+    fi
+    git add -A
+
     export NIX_CONFIG='experimental-features = nix-command flakes'
     nix --max-jobs 1 run home-manager -- switch --impure --flake .#$flake_target -b backup
   "
