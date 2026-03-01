@@ -6,6 +6,9 @@ with pkgs; [
   llmPkgs.claude-code
   llmPkgs.opencode
   llmPkgs.happy-coder
+  llmPkgs.beads
+  llmPkgs.openspec
+  llmPkgs.agent-browser
 
   # Version control
   git
@@ -24,6 +27,8 @@ with pkgs; [
   wget
   htop
   tmux
+  gettext  # provides envsubst
+  ntfy-sh
 
   # Node.js
   nodejs_22  # LTS
