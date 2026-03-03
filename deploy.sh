@@ -548,9 +548,8 @@ setup_config() {
 
   # Always copy flake.nix and nix config files (preserving directory structure)
   scp -q "$script_dir/flake.nix" "$TARGET_HOST:$remote_home/.config/home-manager/"
-  ssh "$TARGET_HOST" "mkdir -p '$remote_home/.config/home-manager/home-manager' '$remote_home/.config/home-manager/shared'"
+  ssh "$TARGET_HOST" "mkdir -p '$remote_home/.config/home-manager/home-manager'"
   scp -q "$script_dir/home-manager/home.nix" "$TARGET_HOST:$remote_home/.config/home-manager/home-manager/"
-  scp -q "$script_dir/shared/packages.nix" "$TARGET_HOST:$remote_home/.config/home-manager/shared/"
 
   # Smart sync for flake.lock - only push if local is newer
   local local_ts remote_lock remote_ts
@@ -813,7 +812,7 @@ deploy_nixos_anywhere() {
   # at build time. The repo stays untouched.
   local temp_flake
   temp_flake=$(mktemp -d)
-  cp -r "$script_dir"/flake.nix "$script_dir"/flake.lock "$script_dir"/nixos "$script_dir"/home-manager "$script_dir"/shared "$temp_flake/"
+  cp -r "$script_dir"/flake.nix "$script_dir"/flake.lock "$script_dir"/nixos "$script_dir"/home-manager "$temp_flake/"
   sed -i '' "s/networking.hostName = \"agent-machine\"/networking.hostName = \"$TARGET_HOSTNAME\"/" "$temp_flake/nixos/configuration.nix"
   git -C "$temp_flake" init -q && git -C "$temp_flake" add -A && git -C "$temp_flake" commit -q -m "temp"
 
@@ -868,12 +867,11 @@ rebuild_nixos() {
   fi
 
   # Copy flake files to /etc/nixos
-  ssh "$root_target" "mkdir -p /etc/nixos/nixos /etc/nixos/home-manager /etc/nixos/shared"
+  ssh "$root_target" "mkdir -p /etc/nixos/nixos /etc/nixos/home-manager"
   scp -q "$script_dir/flake.nix" "$root_target:/etc/nixos/"
   scp -q "$script_dir/nixos/configuration.nix" "$root_target:/etc/nixos/nixos/"
   scp -q "$script_dir/nixos/disk-config.nix" "$root_target:/etc/nixos/nixos/"
   scp -q "$script_dir/home-manager/home.nix" "$root_target:/etc/nixos/home-manager/"
-  scp -q "$script_dir/shared/packages.nix" "$root_target:/etc/nixos/shared/"
 
   # Substitute the target's hostname into the copied configuration
   ssh "$root_target" "sed -i 's/networking.hostName = \"agent-machine\"/networking.hostName = \"$TARGET_HOSTNAME\"/' /etc/nixos/nixos/configuration.nix"

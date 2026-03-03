@@ -4,9 +4,24 @@
 {
   home.stateVersion = "24.11";
 
-  home.packages = import ../shared/packages.nix {
-    inherit pkgs llmPkgs jjSyncPkg useDocker;
+  tools.tasks = {
+    node.enable = true;
+    ai = {
+      enable = true;
+      llmPackages = llmPkgs;
+      extraPackages = lib.optional (jjSyncPkg != null) jjSyncPkg;
+    };
+    buildTools.enable = true;
   };
+
+  home.packages = if useDocker then [
+    (pkgs.writeShellScriptBin "docker-compose" ''exec docker compose "$@"'')
+  ] else [
+    pkgs.podman
+    pkgs.podman-compose
+    (pkgs.writeShellScriptBin "docker" ''exec podman "$@"'')
+    (pkgs.writeShellScriptBin "docker-compose" ''exec podman-compose "$@"'')
+  ];
 
   home.file.".local/bin/claude" = {
     source = "${llmPkgs.claude-code}/bin/claude";
@@ -34,8 +49,6 @@
   };
 
   # SSH agent socket persistence for tmux
-  # When you SSH with -A, the agent socket path is session-specific.
-  # This creates a stable symlink that tmux sessions can use.
   programs.bash = {
     enable = true;
     initExtra = ''
@@ -47,7 +60,6 @@
       fi
 
       # Update agent socket symlink on new SSH connections with -A
-      # Standard SSH forwarding uses /tmp/ssh-XXX/agent.XXX
       if [[ "$SSH_AUTH_SOCK" == /tmp/ssh-*/agent.* ]]; then
         mkdir -p "$HOME/.ssh"
         ln -sf "$SSH_AUTH_SOCK" "$HOME/.ssh/agent_socket"
@@ -112,12 +124,8 @@
     '';
   };
 
-  # Direnv for project-specific environments
-  programs.direnv = {
-    enable = true;
-    nix-direnv.enable = true;  # Better nix integration, caches devshells
-    config.whitelist.prefix = [ "/" ];  # Auto-allow all directories (sandbox environment)
-  };
+  # Sandbox: auto-allow all directories for direnv
+  programs.direnv.config.whitelist.prefix = [ "/" ];
 
   # Let home-manager manage itself
   programs.home-manager.enable = true;

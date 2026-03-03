@@ -1,6 +1,6 @@
 # Full NixOS configuration for nixos-anywhere deployment
 # System-level config only; user configs handled by home-manager
-{ config, pkgs, lib, modulesPath, llmPkgs, ... }:
+{ config, pkgs, lib, modulesPath, ... }:
 
 {
   imports = [

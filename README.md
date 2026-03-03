@@ -22,7 +22,6 @@ Use this for disposable remote servers where you want full control.
 |------|--------------|
 | `home-manager/home.nix` | Home-manager config: packages, shell, environment |
 | `nixos/configuration.nix` | NixOS system config (for --nixos mode) |
-| `shared/packages.nix` | Packages common to both modes |
 | `home/` | Files copied to `~/` on the target |
 | `secrets.env` | API keys, copied to `~/.secrets.env` on target |
 

@@ -19,9 +19,13 @@
       url = "git+ssh://git@github.com/allouis/jj-sync";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    nix-config = {
+      url = "git+ssh://git@github.com/allouis/nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, home-manager, disko, llm-agents, jj-sync, ... }:
+  outputs = { self, nixpkgs, home-manager, disko, llm-agents, jj-sync, nix-config, ... }:
     let
       # Home-manager configuration (preserves existing OS)
       mkHome = { system, useDocker ? false }:
@@ -37,6 +41,7 @@
           inherit pkgs;
           extraSpecialArgs = { inherit llmPkgs jjSyncPkg useDocker; };
           modules = [
+            nix-config.homeModules.default
             ./home-manager/home.nix
             {
               home.username = username;
@@ -47,12 +52,8 @@
 
       # NixOS configuration (replaces entire OS)
       mkNixOS = { system, disk }:
-        let
-          llmPkgs = llm-agents.packages.${system};
-        in
         nixpkgs.lib.nixosSystem {
           inherit system;
-          specialArgs = { inherit llmPkgs; };
           modules = [
             disko.nixosModules.disko
             ./nixos/disk-config.nix
