@@ -15,6 +15,11 @@ case "$ARCH" in
   aarch64) ARCH="aarch64-linux" ;;
 esac
 
-nix run home-manager -- switch --impure --flake ".#agent-$ARCH"
+TARGET="agent-$ARCH"
+if [ -f /etc/llmbo ]; then
+  TARGET="nixos-agent-$ARCH"
+fi
+
+nix run home-manager -- switch --impure --flake ".#$TARGET"
 
 echo "Done! You may need to restart your shell for changes to take effect."
