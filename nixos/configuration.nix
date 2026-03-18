@@ -29,6 +29,7 @@
     };
   };
 
+
   nix.settings = {
     experimental-features = [ "nix-command" "flakes" ];
     auto-optimise-store = true;
@@ -81,7 +82,7 @@
 
   # Marker file to indicate this NixOS was installed by llmbo
   # Used by deploy.sh to detect re-runs and skip reinstallation
-  environment.systemPackages = [ pkgs.mosh ];
+  environment.systemPackages = [ pkgs.git pkgs.mosh ];
 
   environment.etc."llmbo".text = "llmbo";
 
