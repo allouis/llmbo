@@ -979,6 +979,9 @@ main() {
     echo "  ssh -A $TARGET_HOST"
     echo ""
     echo "The agent user is recommended for day-to-day use."
+    echo ""
+    echo "To connect this machine to your Tailscale network:"
+    echo "  ssh root@${TARGET_HOST#*@} tailscale up"
   else
     success "Deployment complete!"
     echo ""

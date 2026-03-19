@@ -20,6 +20,9 @@
   networking.useDHCP = lib.mkDefault true;
   networking.firewall.enable = true;
   networking.firewall.allowedUDPPortRanges = [{ from = 60000; to = 61000; }];
+  networking.firewall.trustedInterfaces = [ "tailscale0" ];
+
+  services.tailscale.enable = true;
 
   services.openssh = {
     enable = true;
